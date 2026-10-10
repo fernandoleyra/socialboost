@@ -1,0 +1,52 @@
+# Everything local: the app + Ollama (+ optional Whisper for voice answers).
+#   docker compose up -d
+#   docker compose exec ollama ollama pull qwen3:14b && docker compose exec ollama ollama pull nomic-embed-text
+#
+# On a Mac, run Ollama natively instead (Docker can't use the Apple GPU) and point the app at it:
+#   OLLAMA_BASE_URL=http://host.docker.internal:11434 docker compose up -d app
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      SOCIALBOOST_WRITER_MODEL: ${SOCIALBOOST_WRITER_MODEL:-qwen3:14b}
+      SOCIALBOOST_VISION_MODEL: ${SOCIALBOOST_VISION_MODEL:-qwen2.5vl:7b}
+      SOCIALBOOST_EMBED_MODEL: ${SOCIALBOOST_EMBED_MODEL:-nomic-embed-text}
+      STT_BASE_URL: ${STT_BASE_URL:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      LINKEDIN_CLIENT_ID: ${LINKEDIN_CLIENT_ID:-}
+      LINKEDIN_CLIENT_SECRET: ${LINKEDIN_CLIENT_SECRET:-}
+      LINKEDIN_REDIRECT_URI: ${LINKEDIN_REDIRECT_URI:-}
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    restart: unless-stopped
+    # Uncomment for NVIDIA GPUs:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices: [{ driver: nvidia, count: all, capabilities: [gpu] }]
+
+  # Optional local speech-to-text (OpenAI-compatible /v1/audio/transcriptions).
+  # Enable with: docker compose --profile voice up -d  and set STT_BASE_URL=http://whisper:8000/v1
+  whisper:
+    profiles: ["voice"]
+    image: ghcr.io/speaches-ai/speaches:latest-cpu
+    ports:
+      - "8000:8000"
+    volumes:
+      - whisper:/home/ubuntu/.cache/huggingface
+    restart: unless-stopped
+
+volumes:
+  ollama:
+  whisper:
