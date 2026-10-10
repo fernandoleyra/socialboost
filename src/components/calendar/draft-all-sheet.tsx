@@ -11,6 +11,8 @@ import { LOCALE } from "./views";
 type ItemState = { status: "waiting" | "working" | "done" | "failed" | "skipped"; message?: string; score?: number | null };
 
 /**
+ * `posts` must be a snapshot taken when the sheet opens (a new array resets progress).
+ *
  * "Draft all planned": runs the Studio's autopilot (angle → draft → check → fix) for each planned
  * idea in view, one after another so a local model isn't asked to do two at once. Cancellable.
  */
@@ -28,9 +30,7 @@ export function DraftAllSheet({ open, posts, timezone, onClose, onFinished }: { 
       setFinished(false);
       changedRef.current = false;
     }
-    // Reset only when the sheet opens; the list is frozen while it's open.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, [open, posts]);
 
   useEffect(() => () => ctrlRef.current?.abort(), []);
 
