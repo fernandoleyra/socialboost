@@ -2,8 +2,8 @@
  * Suggested publishing slots for the editor's Schedule sheet. Pure.
  *
  * Works in the browser's local time (the date-time picker is local too). Follows the strategy
- * cadence (weekdays + time) and skips days that already have a post, keeping ≥ 24 h between
- * posts (research 02 §1.3: < 12 h after the previous post costs reach).
+ * cadence (weekdays + time) and skips days that already have a post, keeping ≥ 12 h between
+ * posts (research 02 §1.3: < 12 h after the previous post costs reach; 12-24 h is neutral).
  */
 
 export type Cadence = { days: number[]; time: string };
@@ -15,6 +15,8 @@ function parseTime(time: string): [number, number] {
   if (!m) return [8, 30];
   return [Math.min(23, Number(m[1])), Math.min(59, Number(m[2]))];
 }
+
+const MIN_GAP_MS = 12 * 3600_000;
 
 const dayKey = (d: Date) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
 
@@ -38,8 +40,7 @@ export function nextOpenSlots(cadence: Cadence | null | undefined, taken: string
     if (!c.days.includes(d.getDay())) continue;
     if (d.getTime() <= now.getTime() + 30 * 60_000) continue;
     if (takenDays.has(dayKey(d))) continue;
-    if (takenTimes.some((t) => Math.abs(t - d.getTime()) < 24 * 3600_000)) continue;
-    if (out.some((o) => Math.abs(o.getTime() - d.getTime()) < 24 * 3600_000)) continue;
+    if (takenTimes.some((t) => Math.abs(t - d.getTime()) < MIN_GAP_MS)) continue;
     out.push(d);
   }
   return out;

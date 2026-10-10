@@ -59,10 +59,10 @@ const LooseAngle = z.object({
 function coerceAngle(raw: unknown, fallback: StructureId = "scene-lesson"): Angle | null {
   const p = LooseAngle.safeParse(raw);
   if (!p.success) return null;
-  const hook = cleanHook(p.data.hook);
+  const hookType = (HOOK_TYPES as readonly string[]).includes(p.data.hookType.toLowerCase()) ? (p.data.hookType.toLowerCase() as HookType) : "scene";
+  const hook = cleanHook(p.data.hook, { keepQuotes: hookType === "dialogue" });
   const takeaway = p.data.takeaway.trim();
   if (!hook && !takeaway) return null;
-  const hookType = (HOOK_TYPES as readonly string[]).includes(p.data.hookType.toLowerCase()) ? (p.data.hookType.toLowerCase() as HookType) : "scene";
   return {
     hook,
     hookType,
@@ -92,12 +92,25 @@ export function serializeAngleField(f: AngleField): string {
   return JSON.stringify({ v: 1, selected: f.selected, options: f.options, ...(f.note ? { note: f.note } : {}) });
 }
 
-/** Strip quotes, labels and trailing punctuation noise models add around a hook. */
-export function cleanHook(hook: string): string {
+/**
+ * Strip labels, wrapping quotes and spacing noise models add around a hook. Dialogue hooks keep
+ * their quotes: there the quote marks are the point.
+ */
+export function cleanHook(hook: string, opts: { keepQuotes?: boolean } = {}): string {
   let h = hook.replace(/\s+/g, " ").trim();
   h = h.replace(/^(?:hook|first line|line \d)\s*[:\-–]\s*/i, "");
-  if (/^["“'«].*["”'»]$/.test(h) && !/["“”].+["“”].+["“”]/.test(h.slice(1, -1))) h = h.slice(1, -1).trim();
+  if (!opts.keepQuotes && /^["“'«].*["”'»]$/.test(h) && !/["“”].+["“”].+["“”]/.test(h.slice(1, -1))) h = h.slice(1, -1).trim();
   return h.replace(/\s+([,.!?])/g, "$1");
+}
+
+/** A user-chosen angle: only the structure is required (hook and takeaway may be empty). */
+export function toAngle(raw: unknown, fallback: StructureId = "scene-lesson"): Angle | null {
+  const p = LooseAngle.safeParse(raw);
+  if (!p.success) return null;
+  const structureId = matchStructureId(p.data.structureId);
+  if (!structureId) return coerceAngle(raw, fallback);
+  const hookType = (HOOK_TYPES as readonly string[]).includes(p.data.hookType.toLowerCase()) ? (p.data.hookType.toLowerCase() as HookType) : "scene";
+  return { hook: cleanHook(p.data.hook, { keepQuotes: hookType === "dialogue" }), hookType, structureId, takeaway: p.data.takeaway.trim(), whyItWorks: p.data.whyItWorks.trim() };
 }
 
 /** Validate, de-duplicate and cap model-suggested angles. */
@@ -118,7 +131,7 @@ export function normalizeAngles(raw: unknown[], fallback: StructureId, max = 3):
 
 /** Replace the first line (the hook) of a post, keeping everything after it. */
 export function replaceHook(body: string, hook: string): string {
-  const clean = cleanHook(hook);
+  const clean = cleanHook(hook, { keepQuotes: true });
   const nl = body.indexOf("\n");
   if (nl < 0) return clean;
   return clean + body.slice(nl);

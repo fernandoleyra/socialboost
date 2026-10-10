@@ -34,6 +34,7 @@ import {
   positioningCoverage,
   splitThreads,
   storyCoverage,
+  storyExtractionTranscript,
   strengthFromCoverage,
   threadHasPhoto,
   threadPhotoDeferred,
@@ -45,10 +46,12 @@ import {
   formatTranscript,
   interviewerMessages,
   interviewerSystemPrompt,
-  mentionsPhoto,
-  photoAskFallback,
+  isEnglish,
+  openingMessage,
   pillarsPrompt,
   positioningPrompt,
+  protocolLines,
+  questionOnTarget,
   storyCardPrompt,
   type InterviewContext,
 } from "./prompts";
@@ -63,7 +66,7 @@ import {
   type ReplyBody,
 } from "./schemas";
 import { clearInterviewState, getInterviewState, updateInterviewState } from "./store";
-import { cleanReply, filterReply, truncate, wordCount } from "./text";
+import { cleanReply, filterTurn, truncate, wordCount, type TurnFilterOptions } from "./text";
 import type { ActiveInterviewKind, InterviewState, InterviewView, PillarChip, TranscriptMessage, ViewMessage } from "./types";
 import type { z } from "zod";
 
@@ -232,6 +235,46 @@ function buildContext(profile: Profile, interview: Interview, msgs: TranscriptMe
   };
 }
 
+type TurnPlan = { fixed: string } | { filter: TurnFilterOptions; suffix: string | null };
+
+/**
+ * How a turn is produced. Protocol lines (greeting, photo request, finish hints) are fixed
+ * text in the user's language; the model writes only the short reaction and the question,
+ * and an off-target question is swapped for the bank probe (English).
+ */
+function planTurn(profile: Profile, interview: Interview, ctx: InterviewContext, d: Decision): TurnPlan {
+  const proto = protocolLines(profile.language);
+  const statement = (maxStatements: number, suffix: string): TurnPlan => ({ filter: { mode: "statement", maxStatements, maxChars: 320 }, suffix });
+  const free: TurnPlan = { filter: { mode: "free", maxStatements: 0, maxChars: 560 }, suffix: null };
+  switch (d.stage) {
+    case "opening": {
+      const returning = listInterviews(profile.id).some((i) => i.id !== interview.id && i.kind === interview.kind && i.status === "completed");
+      const variant = [...interview.id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
+      const text = openingMessage(ctx, { returning, variant });
+      return text ? { fixed: text } : { filter: { mode: "question", maxStatements: 3, maxChars: 600 }, suffix: null };
+    }
+    case "closing":
+      return proto ? { fixed: interview.kind === "positioning" ? proto.closingPositioning : proto.closingStory } : free;
+    case "probe":
+    case "pos-question":
+    case "pos-example": {
+      const target = d.stage === "pos-example" ? "example" : d.generic ? "specific" : d.target;
+      const check = isEnglish(profile.language) && d.probe ? { accept: (q: string) => questionOnTarget(target, q), fallbackQuestion: d.probe.text } : {};
+      return { filter: { mode: "question", maxStatements: d.firstMessage ? 2 : 1, maxChars: 420, ...check }, suffix: null };
+    }
+    case "photo":
+      return proto ? statement(1, proto.photoAsk) : { filter: { mode: "question", maxStatements: 1, maxChars: 420 }, suffix: null };
+    case "photo-caption":
+      return proto ? statement(1, proto.captionAsk) : { filter: { mode: "question", maxStatements: 1, maxChars: 420 }, suffix: null };
+    case "wrap":
+      return proto ? statement(2, d.photoDeferred ? proto.wrapDeferred : proto.wrap) : free;
+    case "pos-wrap":
+      return proto ? statement(1, proto.posWrap) : free;
+    case "pos-followup":
+      return proto ? statement(1, proto.posFollowup) : free;
+  }
+}
+
 /**
  * Store the user's answer (if any), decide the next move and stream the interviewer's
  * reply. The answer is saved before generation, so a failed or cancelled turn can be
@@ -252,7 +295,8 @@ export function replyStream(profile: Profile, id: string, body: z.infer<typeof R
     addMessage(id, "user", text, photos.map((p) => p.id));
     msgs = transcriptOf(id);
     const updated = msgs;
-    updateInterviewState(id, (s) => applyUserTurn(kind, updated, s, body.intent));
+    const state = updateInterviewState(id, (s) => applyUserTurn(kind, updated, s, body.intent));
+    if (content) saveCaption(profile.id, currentThread(msgs, state), state, content);
   } else if (msgs.length > 0 && msgs[msgs.length - 1].role === "assistant") {
     throw new HttpError(400, "Type an answer first.");
   }
@@ -260,29 +304,32 @@ export function replyStream(profile: Profile, id: string, body: z.infer<typeof R
   const state = getInterviewState(id);
   const decision = decideNext(kind, msgs, state);
   const ctx = buildContext(profile, interview, msgs, state);
-  const thread = kind === "story" ? currentThread(msgs, state) : msgs;
+  const plan = planTurn(profile, interview, ctx, decision);
 
   const upstream = new AbortController();
   const onAbort = () => upstream.abort();
   signal.addEventListener("abort", onAbort, { once: true });
 
-  const single = isSingleQuestionStage(decision.stage);
-  const source = chatStream({
-    task: "interviewer",
-    system: interviewerSystemPrompt(ctx),
-    messages: interviewerMessages(ctx, thread, decision),
-    maxTokens: 260,
-    signal: upstream.signal,
-  });
-
   async function* reply(): AsyncGenerator<string> {
+    if ("fixed" in plan) {
+      yield plan.fixed;
+      return;
+    }
+    const thread = kind === "story" ? currentThread(msgs, state) : msgs;
+    const source = chatStream({
+      task: "interviewer",
+      system: interviewerSystemPrompt(ctx),
+      messages: interviewerMessages(ctx, thread, decision, plan.filter.mode === "free" ? "free" : "protocol"),
+      maxTokens: 260,
+      signal: upstream.signal,
+    });
     let text = "";
-    for await (const piece of filterReply(source, { singleQuestion: single, maxChars: single ? 380 : 560 }, () => upstream.abort())) {
+    for await (const piece of filterTurn(source, plan.filter, () => upstream.abort())) {
       text += piece;
       yield piece;
     }
-    if (decision.stage === "photo" && !mentionsPhoto(text)) {
-      const extra = (text ? " " : "") + photoAskFallback(profile.language);
+    if (plan.suffix) {
+      const extra = (text ? "\n\n" : "") + plan.suffix;
       text += extra;
       yield extra;
     }
@@ -291,9 +338,18 @@ export function replyStream(profile: Profile, id: string, body: z.infer<typeof R
 
   return streamText(reply(), (full) => {
     signal.removeEventListener("abort", onAbort);
-    const msg = addMessage(id, "assistant", cleanReply(full, { singleQuestion: false, maxChars: 900 }));
+    const msg = addMessage(id, "assistant", cleanReply(full));
     recordMeta(id, msg.id, decision);
   });
+}
+
+/** The answer to "what's the one line you'd tell a friend about this photo?" becomes the photo's note. */
+function saveCaption(profileId: string, thread: TranscriptMessage[], state: InterviewState, answer: string) {
+  const idx = thread.length - 1;
+  const prev = [...thread.slice(0, idx)].reverse().find((m) => m.role === "assistant");
+  if (!prev || state.meta[prev.id]?.stage !== "photo-caption") return;
+  const photoMsg = [...thread].reverse().find((m) => m.role === "user" && m.photoIds.length > 0);
+  for (const p of ownedPhotos(profileId, photoMsg?.photoIds ?? [])) if (!p.userNote) updatePhoto(p.id, { userNote: answer.slice(0, 500) });
 }
 
 function recordMeta(interviewId: string, messageId: string, d: Decision) {
@@ -406,12 +462,14 @@ async function finishStory(profile: Profile, interview: Interview, msgs: Transcr
   const extraPhotos = ownedPhotos(profile.id, extraPhotoIds).map((p) => p.id);
   const cards: { memory: ReturnType<typeof cardToMemory>; photoIds: string[] }[] = [];
   for (const [i, thread] of threads.entries()) {
+    const story = storyExtractionTranscript(thread, state.meta);
     const prompt = storyCardPrompt({
       name: profile.name,
       headline: profile.headline,
       language: profile.language,
       pillars: pillars.map((p) => ({ name: p.name, description: p.description })),
-      transcript: formatTranscript(thread, profile.name, 16000),
+      transcript: formatTranscript(story.messages, profile.name, 16000),
+      privacy: story.privacy,
     });
     const card = await chatJson(schema, { task: "extractor", system: prompt.system, messages: [{ role: "user", content: prompt.user }], maxTokens: 2500 });
     const users = thread.filter((m) => m.role === "user");

@@ -2,16 +2,10 @@ import "server-only";
 import { getMemory, getPhoto, getProfile, getStrategy, getVoiceProfile, type VoiceSample } from "@/lib/repo";
 import { HttpError } from "@/lib/http";
 import { pickVoiceExamples, voicePromptBlock } from "@/lib/voice/examples";
-import type { Memory, Pillar, Post, Strategy, VoiceProfile } from "@/lib/types";
+import type { Memory, Post, VoiceProfile } from "@/lib/types";
+import { findPillar } from "./pillars";
 import { extractNeverSay, lintPost, type LintResult } from "./lint";
 import { factsText, type PromptContext } from "./prompts";
-
-/** Match a post/memory pillar reference (id or name) to the strategy's pillar. */
-export function findPillar(strategy: Strategy | null, key: string | null | undefined): Pillar | null {
-  if (!strategy || !key) return null;
-  const k = key.trim().toLowerCase();
-  return strategy.pillars.find((p) => p.id === key) ?? strategy.pillars.find((p) => p.name.trim().toLowerCase() === k) ?? null;
-}
 
 export type FactoryContext = PromptContext & {
   profileId: string;
@@ -74,23 +68,30 @@ export async function loadContext(post: Post, opts: { examplesQuery?: string } =
   };
 }
 
-/** Lint options for a post without loading voice examples (cheap: used on every save). */
-export function lintForPost(post: Post, body: string): LintResult {
+/** Inputs for linting a post without loading voice examples (cheap: used on every save). */
+export function lintInputs(post: Pick<Post, "profileId" | "memoryId" | "photoId">): { facts?: string; neverSay: string[]; stats: VoiceProfile["stats"] } {
   const strategy = getStrategy(post.profileId);
   const profile = getProfile(post.profileId);
   const memory = post.memoryId ? getMemory(post.memoryId) : null;
   const photo = post.photoId ? getPhoto(post.photoId) : null;
   const voice = getVoiceProfile(post.profileId);
-  const facts = factsText({
-    author: { name: profile?.name ?? "", headline: profile?.headline ?? "" },
-    language: strategy?.language || profile?.language || "en",
-    strategy,
-    pillar: null,
-    memory,
-    photo: photo ? { caption: photo.caption, userNote: photo.userNote } : null,
-    voiceBlock: "",
-    examples: [],
-    stats: voice.stats,
-  });
-  return lintPost(body, voice.stats, { facts: memory ? facts : undefined, neverSay: extractNeverSay(voice.manualRules) });
+  const facts = memory
+    ? factsText({
+        author: { name: profile?.name ?? "", headline: profile?.headline ?? "" },
+        language: strategy?.language || profile?.language || "en",
+        strategy,
+        pillar: null,
+        memory,
+        photo: photo ? { caption: photo.caption, userNote: photo.userNote } : null,
+        voiceBlock: "",
+        examples: [],
+        stats: voice.stats,
+      })
+    : undefined;
+  return { facts, neverSay: extractNeverSay(voice.manualRules), stats: voice.stats };
+}
+
+export function lintForPost(post: Post, body: string): LintResult {
+  const { facts, neverSay, stats } = lintInputs(post);
+  return lintPost(body, stats, { facts, neverSay });
 }

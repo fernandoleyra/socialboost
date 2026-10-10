@@ -1,6 +1,7 @@
 import { handle, ok } from "@/lib/http";
 import { requireProfile } from "@/lib/repo";
 import { ManualMemorySchema, createManualMemory, queryMemories } from "@/lib/memory";
+import { readJsonBody } from "@/lib/photos";
 import { parseMemoryFilter, type MemoryFilter } from "@/lib/memory-core";
 
 export const dynamic = "force-dynamic";
@@ -31,6 +32,6 @@ export const GET = handle(async (req: Request) => {
  */
 export const POST = handle(async (req: Request) => {
   const profile = requireProfile();
-  const input = ManualMemorySchema.parse(await req.json());
+  const input = ManualMemorySchema.parse(await readJsonBody(req));
   return ok(await createManualMemory(profile.id, input), { status: 201 });
 });

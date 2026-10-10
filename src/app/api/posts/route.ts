@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { readBody } from "@/lib/factory/request";
 import { handle, ok, HttpError } from "@/lib/http";
 import { listPosts, requireProfile } from "@/lib/repo";
 import { createBlankPost, createPostFromMemory, parseStatuses } from "@/lib/factory/posts";
@@ -37,7 +38,7 @@ const Body = z.object({
  */
 export const POST = handle(async (req: Request) => {
   const profile = requireProfile();
-  const body = Body.parse(await req.json());
+  const body = await readBody(req, Body);
   if (body.scheduledAt && Number.isNaN(Date.parse(body.scheduledAt))) throw new HttpError(400, "scheduledAt must be an ISO date.");
   if (body.memoryId) {
     const { post, reused } = createPostFromMemory(profile.id, { memoryId: body.memoryId, pillar: body.pillar, format: body.format, reuseEmpty: body.reuseEmpty, scheduledAt: body.scheduledAt });

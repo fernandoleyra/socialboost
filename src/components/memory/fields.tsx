@@ -110,7 +110,11 @@ export function ListEditor({
                   className="flex-1"
                 />
               )}
-              <IconButton label="Remove" className="mt-0.5 shrink-0 text-label-2 opacity-60 group-hover:opacity-100" onClick={() => onChange(value.filter((_, j) => j !== i))}>
+              <IconButton
+                label={`Remove ${addLabel.replace(/^Add\s+/i, "")} ${i + 1}`}
+                className="mt-0.5 shrink-0 text-label-2 opacity-60 group-hover:opacity-100 focus-visible:opacity-100"
+                onClick={() => onChange(value.filter((_, j) => j !== i))}
+              >
                 <X className="size-4" />
               </IconButton>
             </li>

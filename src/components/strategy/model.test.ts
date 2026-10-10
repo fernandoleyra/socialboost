@@ -9,6 +9,7 @@ import {
   isValidTime,
   nextPillarColor,
   normalizeStrategy,
+  pillarIdOf,
   pillarShares,
   setPostsPerWeek,
   sharePercents,
@@ -126,5 +127,19 @@ describe("normalizeStrategy", () => {
     expect(parsed.pillars[1].id).toBe("keep");
     expect(parsed.cadence).toEqual({ postsPerWeek: 14, days: [1, 3], time: "09:00" });
     expect(prepareStrategyInput({ positioning: "x" })).toEqual({ positioning: "x" });
+  });
+});
+
+describe("memory pillar lookup", () => {
+  const pillars = [
+    { id: "pl_a", name: "Building with AI" },
+    { id: "pl_b", name: "Founder lessons" },
+  ];
+  it("resolves ids, names (case-insensitive) and unknowns", () => {
+    expect(pillarIdOf(pillars, "pl_b")).toBe("pl_b");
+    expect(pillarIdOf(pillars, "  founder LESSONS ")).toBe("pl_b");
+    expect(pillarIdOf(pillars, "Gone pillar")).toBeNull();
+    expect(pillarIdOf(pillars, null)).toBeNull();
+    expect(pillarIdOf([], "pl_a")).toBeNull();
   });
 });

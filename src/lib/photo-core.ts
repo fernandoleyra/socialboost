@@ -156,7 +156,7 @@ export const VISION_SYSTEM =
 export const VISION_PROMPT = `Describe this photo.
 
 Rules:
-1. description: 1-2 short sentences. Say who or what is in it, what is happening, and the setting. Example: "A man takes a selfie on a train, holding a menu with a woman's photo on the cover. A coffee cup sits on the table."
+1. description: 1-2 short sentences about THIS photo. Say who or what is in it, what is happening, and the setting. Style example from a different photo, do not reuse its content: "A woman presents to five people around a table. A whiteboard with a hand-drawn chart is behind her."
 2. candid: true if it looks like a real, unposed or casual phone photo. false if it looks like a studio portrait, a stock photo, a staged marketing shot, or a graphic.
 3. kind: one of selfie, people, place, object, screen, document, headshot, graphic, other.
 4. people: how many people are visible. 0 if none.

@@ -21,7 +21,9 @@ let dashboardRoute: typeof import("@/app/api/dashboard/route");
 let exportRoute: typeof import("@/app/api/export/route");
 let healthRoute: typeof import("@/app/api/system/health/route");
 
-const json = (body: unknown) => new Request("http://local/api", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+const json = (body: unknown, query = "") =>
+  new Request(`http://local/api/strategy${query}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+const get = (query = "") => new Request(`http://local/api/strategy${query}`);
 
 beforeAll(async () => {
   repo = await import("@/lib/repo");
@@ -37,7 +39,7 @@ afterAll(() => {
 
 describe("before onboarding", () => {
   it("asks for a profile", async () => {
-    const res = await strategyRoute.GET();
+    const res = await strategyRoute.GET(get());
     expect(res.status).toBe(409);
     expect((await res.json()).hint).toMatch(/Welcome/);
   });
@@ -51,11 +53,12 @@ describe("with a profile", () => {
   });
 
   it("starts with no strategy and guides to the positioning interview", async () => {
-    expect((await (await strategyRoute.GET()).json()).strategy).toBeNull();
+    expect((await (await strategyRoute.GET(get())).json()).strategy).toBeNull();
     const dash = await (await dashboardRoute.GET()).json();
     expect(dash.firstName).toBe("Jane");
     expect(dash.hasStrategy).toBe(false);
     expect(dash.actions[0]).toMatchObject({ kind: "positioning", href: "/interviews/new?kind=positioning&auto=1" });
+    expect(dash.actions.map((a: { kind: string }) => a.kind)).not.toContain("plan");
     expect(dash.week).toHaveLength(7);
   });
 
@@ -83,9 +86,35 @@ describe("with a profile", () => {
     expect(again.strategy.cta).toBe("P.S. Checklist in Featured.");
   });
 
+  it("mirrors an explicit language change onto the profile only", async () => {
+    const current = (await (await strategyRoute.GET(get())).json()).strategy;
+    await strategyRoute.PUT(json({ ...current, notes: "Full-object autosave" }));
+    expect(repo.getProfile(profileId)!.language).toBe("es");
+    await strategyRoute.PUT(json({ language: "de" }));
+    expect(repo.getProfile(profileId)!.language).toBe("de");
+    await strategyRoute.PUT(json({ language: "es" }));
+    expect(repo.getProfile(profileId)!.language).toBe("es");
+  });
+
   it("rejects invalid strategy input with a 400", async () => {
     const res = await strategyRoute.PUT(json({ goals: "not a list" }));
     expect(res.status).toBe(400);
+    const bad = await strategyRoute.PUT(new Request("http://local/api/strategy", { method: "PUT", body: "{not json" }));
+    expect(bad.status).toBe(400);
+  });
+
+  it("pins saves to the profile the editor was opened for, even after a switch", async () => {
+    const other = repo.createProfile({ name: "Max Muster", language: "de", timezone: "Europe/Berlin" }); // becomes active
+    const pinned = `?profileId=${profileId}`;
+    // A late autosave from Jane's editor lands after the switch to Max.
+    await strategyRoute.PUT(json({ notes: "Jane's late autosave" }, pinned));
+    expect(repo.getStrategy(profileId)!.notes).toBe("Jane's late autosave");
+    expect(repo.getStrategy(other.id)).toBeNull();
+    expect((await (await strategyRoute.GET(get(pinned))).json()).strategy.notes).toBe("Jane's late autosave");
+    expect((await strategyRoute.PUT(json({ notes: "x" }, "?profileId=pf_missing"))).status).toBe(404);
+    repo.deleteProfile(other.id);
+    const { setActiveProfileId } = await import("@/lib/settings");
+    setActiveProfileId(profileId);
   });
 
   it("reflects memories and posts on the dashboard", async () => {

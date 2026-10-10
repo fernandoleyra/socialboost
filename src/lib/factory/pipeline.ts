@@ -4,7 +4,7 @@ import { HttpError } from "@/lib/http";
 import { LLMError, chat, chatJson, chatStream } from "@/lib/llm";
 import { getMemory, getPost, updatePost } from "@/lib/repo";
 import { CritiqueSchema, type Critique, type Post } from "@/lib/types";
-import { AnglesResponseSchema, HooksResponseSchema, cleanHook, normalizeAngles, parseAngleField, serializeAngleField, type Angle, type AngleField, type HookOption } from "./angles";
+import { AnglesResponseSchema, HooksResponseSchema, cleanHook, normalizeAngles, parseAngleField, serializeAngleField, toAngle, type Angle, type AngleField, type HookOption } from "./angles";
 import { cleanPost } from "./clean";
 import { loadContext, type FactoryContext } from "./context";
 import { lintPost, type LintResult } from "./lint";
@@ -79,7 +79,7 @@ export async function generateAngles(post: Post, signal?: AbortSignal): Promise<
 export function resolveAngle(post: Post, input: { angle?: Angle | null; angleIndex?: number | null }): { angle: Angle | null; field: AngleField } {
   const field = parseAngleField(post.angle);
   if (input.angle) {
-    const [a] = normalizeAngles([input.angle], input.angle.structureId ?? "scene-lesson", 1);
+    const a = toAngle(input.angle);
     if (a) return { angle: a, field: { ...field, selected: a } };
   }
   if (input.angleIndex !== undefined && input.angleIndex !== null) {
@@ -131,6 +131,15 @@ function tidyCritique(c: Critique): Critique {
   };
 }
 
+/** The judge itself: lint, then the critic model, then save the combined quality. */
+async function critiqueWith(ctx: FactoryContext, post: Post, text: string, signal?: AbortSignal): Promise<{ post: Post; critique: Critique }> {
+  const lint = lintFor(ctx, text);
+  const raw = await chatJson(CritiqueSchema, { task: "critic", ...messages(critiquePrompt(ctx, text, lint.issues)), temperature: 0.2, maxTokens: 900, signal });
+  const critique = tidyCritique(raw);
+  const quality = buildQuality({ body: text, lint: lint.issues, lintScore: lint.score, critique, critiqueBody: text });
+  return { post: updatePost(post.id, { quality }), critique };
+}
+
 /**
  * Lint + LLM judge. If `body` differs from the saved text (unsaved edits in the editor), it is
  * saved as a human edit first so the score always describes the stored post.
@@ -140,12 +149,7 @@ export async function runCritique(post: Post, body?: string, signal?: AbortSigna
   if (!text.trim()) throw new HttpError(400, "There's nothing to critique yet.", "Draft the post first.");
   const current = body !== undefined && body !== post.body ? applyHumanEdit(post, body) : post;
   const ctx = await loadContext(current);
-  const lint = lintFor(ctx, text);
-  const raw = await chatJson(CritiqueSchema, { task: "critic", ...messages(critiquePrompt(ctx, text, lint.issues)), temperature: 0.2, maxTokens: 900, signal });
-  const critique = tidyCritique(raw);
-  const quality = buildQuality({ body: text, lint: lint.issues, lintScore: lint.score, critique, critiqueBody: text });
-  const saved = updatePost(current.id, { quality });
-  return { post: saved, critique };
+  return critiqueWith(ctx, current, text, signal);
 }
 
 /* ------------------------------------------------------------------ */
@@ -205,7 +209,7 @@ export async function suggestHooks(post: Post, body?: string | null, signal?: Ab
   const seen = new Set<string>();
   const out: HookOption[] = [];
   for (const h of res.hooks) {
-    const t = cleanHook(h.text);
+    const t = cleanHook(h.text, { keepQuotes: h.type === "dialogue" });
     const key = t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
     if (!t || t.length > 230 || seen.has(key)) continue;
     seen.add(key);
@@ -252,7 +256,7 @@ export async function autopilot(post: Post, opts: { force?: boolean; signal?: Ab
   current = finalizeGeneration(current.id, ctx, draft, "ai", `Draft · ${structure.name} (autopilot)`);
   steps.push("draft");
 
-  current = (await runCritique(current, undefined, opts.signal)).post;
+  current = (await critiqueWith(ctx, current, current.body, opts.signal)).post;
   steps.push("critique");
 
   if (!qualityGate(current.quality, current.body).ready) {
@@ -261,7 +265,7 @@ export async function autopilot(post: Post, opts: { force?: boolean; signal?: Ab
       const revised = await chat({ task: "writer", ...messages(revisePrompt(ctx, current.body, changes)), maxTokens: WRITER_MAX_TOKENS, signal: opts.signal });
       current = finalizeGeneration(current.id, ctx, revised, "revision", "Autopilot fixes");
       steps.push("revise");
-      current = (await runCritique(current, undefined, opts.signal)).post;
+      current = (await critiqueWith(ctx, current, current.body, opts.signal)).post;
       steps.push("critique");
     }
   }

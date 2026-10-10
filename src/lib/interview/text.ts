@@ -203,19 +203,6 @@ function stripPrefixes(text: string): string {
 
 const stripMarkup = (t: string) => t.replace(/\*\*|__|^#+\s*/gm, "").replace(/^\s*[-•]\s+/gm, "");
 
-/** Index just after the first question mark (plus closing quotes/brackets), or -1. */
-function firstQuestionEnd(text: string, minChars = 8): number {
-  const re = /[?？]/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text))) {
-    if (m.index < minChars) continue;
-    let end = m.index + 1;
-    while (end < text.length && /["'”’)\]]/.test(text[end])) end++;
-    return end;
-  }
-  return -1;
-}
-
 /** Cut at the last sentence end before `max` chars (falls back to a hard cut). */
 function capLength(text: string, max: number): string {
   if (text.length <= max) return text;
@@ -224,62 +211,151 @@ function capLength(text: string, max: number): string {
   return (cut > max * 0.4 ? slice.slice(0, cut + 1) : slice).trim();
 }
 
-export type ReplyFilterOptions = { singleQuestion: boolean; maxChars: number };
+const visibleText = (raw: string) => stripMarkup(stripPrefixes(raw.replace(/<think>[\s\S]*?(<\/think>|$)/gi, "")));
 
-/** Final cleanup of a full interviewer reply. Mirrors what the stream filter emitted. */
-export function cleanReply(raw: string, opts: ReplyFilterOptions): string {
-  let t = stripMarkup(stripPrefixes(raw.replace(/<think>[\s\S]*?<\/think>/gi, ""))).trim();
-  if (opts.singleQuestion) {
-    const end = firstQuestionEnd(t);
-    if (end > 0) t = t.slice(0, end);
-  }
-  t = capLength(t, opts.maxChars);
-  // Drop wrapping quotes the model put around its whole message.
-  t = t.replace(/^["“«]+/, "").replace(/(?<=[?.!])["”»]+$/, "");
-  return t.replace(/\n{3,}/g, "\n\n").trim();
+/** Normalise a finished reply for storage: labels, markdown, wrapping quotes, whitespace. */
+export function cleanReply(raw: string, maxChars = 900): string {
+  let t = visibleText(raw).trim();
+  t = capLength(t, maxChars);
+  t = t.replace(/^["\u201c\u00ab]+/, "").replace(/(?<=[?.!])["\u201d\u00bb]+$/, "");
+  return t
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
+const QUESTION_END = /[?\uff1f]["'\u201d\u2019)\]]*$/;
+
 /**
- * Stream wrapper around the model output: removes "Interviewer:" style labels and
- * markdown, stops after the first question when asked to (one question per turn), and
- * caps length. `onStop` fires when we cut the model off early so the caller can abort
- * the upstream request. What is yielded always equals `cleanReply(raw)` at the end.
+ * Split off complete sentences from `text` starting at `from`. A sentence ends at . ! ? …
+ * (plus closing quotes) followed by whitespace, or at a newline. With `final`, the rest
+ * counts as a sentence too.
  */
-export async function* filterReply(source: AsyncIterable<string>, opts: ReplyFilterOptions, onStop?: () => void): AsyncGenerator<string> {
+export function takeSentences(text: string, from: number, final: boolean): { sentences: string[]; end: number } {
+  const sentences: string[] = [];
+  let start = from;
+  let i = from;
+  while (i < text.length) {
+    const c = text[i];
+    if (c === "\n") {
+      const s = text.slice(start, i).trim();
+      if (s) sentences.push(s);
+      start = i + 1;
+    } else if (/[.!?\u2026\uff1f\u3002\uff01]/.test(c)) {
+      let j = i + 1;
+      while (j < text.length && /[.!?"'\u201d\u2019)\]]/.test(text[j])) j++;
+      if (j < text.length && /\s/.test(text[j])) {
+        const s = text.slice(start, j).trim();
+        if (s) sentences.push(s);
+        start = j;
+        i = j;
+        continue;
+      }
+      i = j - 1;
+    }
+    i++;
+  }
+  if (final) {
+    const s = text.slice(start).trim();
+    if (s) sentences.push(s);
+    start = text.length;
+  }
+  return { sentences, end: start };
+}
+
+const FILLER =
+  /^(great|good|ok(ay)?|got it|understood|i see|interesting( scenario| story)?|nice|wow|cool|perfect|sure|right|absolutely|of course|thanks?( for sharing( that)?)?|thank you( for sharing( that)?)?|that'?s (great|interesting|impressive|amazing|fascinating|powerful|wonderful|fantastic|really interesting|a great (story|example|point|answer)|a powerful (moment|story|example))|love (it|that)|fascinating|amazing|impressive|makes sense|sounds good|great (story|answer|point|example)|let'?s (dive|get started|begin|start)( in)?)[.!]*$/i;
+
+/** Generic praise or filler that adds nothing ("Great!", "That's interesting.", "Got it."). */
+export function isFiller(sentence: string): boolean {
+  return wordCount(sentence) <= 6 && FILLER.test(sentence.trim());
+}
+
+function tidySentence(s: string): string {
+  let t = s.trim();
+  const quotes = (t.match(/["\u201c\u201d]/g) ?? []).length;
+  if (quotes % 2 === 1) t = t.replace(/^["\u201c]/, "").replace(/["\u201d]$/, "");
+  return t;
+}
+
+export type TurnFilterOptions = {
+  /** "question": short reaction, then exactly one question. "statement": short reaction, no question. "free": only clean up. */
+  mode: "question" | "statement" | "free";
+  /** Reaction sentences allowed (filler like "Great!" never counts). */
+  maxStatements: number;
+  maxChars: number;
+  /** Question mode: is the model's question on target? Off-target questions are replaced. */
+  accept?: (question: string) => boolean;
+  /** Question mode: asked instead of an off-target or missing question. */
+  fallbackQuestion?: string;
+};
+
+/**
+ * Sentence-level filter over the streamed model output. Small local models add labels,
+ * praise, summaries and extra questions; this keeps at most `maxStatements` reaction
+ * sentences and (in question mode) exactly one question, swapping in the fallback when the
+ * model's question misses the target. `onStop` fires when the model is cut off early so
+ * the caller can abort the upstream request.
+ */
+export async function* filterTurn(source: AsyncIterable<string>, opts: TurnFilterOptions, onStop?: () => void): AsyncGenerator<string> {
+  if (opts.mode === "free") {
+    let raw = "";
+    for await (const piece of source) raw += piece;
+    const out = cleanReply(raw, opts.maxChars);
+    if (out) yield out;
+    return;
+  }
   let raw = "";
-  let emitted = 0;
-  let emittedText = "";
-  let stopped = false;
+  let consumed = 0;
+  let statements = 0;
+  let emittedChars = 0;
+  let asked = false;
+  let stop = false;
+  const pieces: string[] = [];
+  const emit = (s: string) => {
+    const piece = (emittedChars ? " " : "") + s;
+    emittedChars += piece.length;
+    pieces.push(piece);
+  };
+  const handle = (sentence: string) => {
+    const s = tidySentence(sentence);
+    if (!s) return;
+    if (QUESTION_END.test(s)) {
+      if (opts.mode === "question") {
+        asked = true;
+        emit(opts.accept && opts.fallbackQuestion && !opts.accept(s) ? opts.fallbackQuestion : s);
+      }
+      stop = true;
+      return;
+    }
+    if (isFiller(s)) return;
+    if (statements < opts.maxStatements && emittedChars + s.length <= opts.maxChars) {
+      statements++;
+      emit(s);
+      if (opts.mode === "statement" && statements >= opts.maxStatements) stop = true;
+    } else if (opts.mode === "statement") stop = true;
+  };
+
   for await (const piece of source) {
     raw += piece;
-    const visible = stripMarkup(stripPrefixes(raw.replace(/<think>[\s\S]*?(<\/think>|$)/gi, "")));
-    const trimmedStart = visible.replace(/^\s+/, "");
-    // Hold back the opening until a label/preamble could no longer appear.
-    if (emitted === 0 && trimmedStart.length < 28 && !/\n/.test(trimmedStart)) continue;
-    let limit = trimmedStart.length;
-    const qEnd = opts.singleQuestion ? firstQuestionEnd(trimmedStart) : -1;
-    if (qEnd > 0) {
-      limit = qEnd;
-      stopped = true;
-    } else if (trimmedStart.length > opts.maxChars) {
-      limit = capLength(trimmedStart, opts.maxChars).length;
-      stopped = true;
-    } else {
-      // Keep back characters that may still turn into markup ("*" → "**").
-      while (limit > 0 && /[*_\s]/.test(trimmedStart[limit - 1])) limit--;
+    const visible = visibleText(raw);
+    // Wait until a label or preamble ("Sure! Here's my question:") can no longer change the start.
+    if (consumed === 0 && visible.trimStart().length < 48) continue;
+    const { sentences, end } = takeSentences(visible, consumed, false);
+    consumed = end;
+    for (const s of sentences) {
+      handle(s);
+      if (stop) break;
     }
-    if (limit > emitted) {
-      const piece = trimmedStart.slice(emitted, limit);
-      emittedText += piece;
-      emitted = limit;
-      yield piece;
-    }
-    if (stopped) break;
+    while (pieces.length) yield pieces.shift()!;
+    // A runaway sentence with no end in sight: stop listening.
+    if (!stop && visible.length - consumed > opts.maxChars) stop = true;
+    if (stop) break;
   }
-  if (stopped) onStop?.();
-  const final = cleanReply(raw, opts);
-  // Emit whatever the final cleanup kept that we held back (tail, short replies).
-  if (final.length > emittedText.length && final.startsWith(emittedText)) yield final.slice(emittedText.length);
+  if (stop) onStop?.();
+  else for (const s of takeSentences(visibleText(raw), consumed, true).sentences) if (!stop) handle(s);
+  if (opts.mode === "question" && !asked && opts.fallbackQuestion) emit(opts.fallbackQuestion);
+  while (pieces.length) yield pieces.shift()!;
 }
 
 /* ------------------------------------------------------------------ */
@@ -301,4 +377,31 @@ export function truncate(text: string, max: number): string {
 
 export function firstName(name: string): string {
   return name.trim().split(/\s+/)[0] || name.trim();
+}
+
+function dayKey(d: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+}
+
+/**
+ * "Today" / "Yesterday" / "Mon, Oct 6" (adds the year when it isn't the current one) in the
+ * profile's time zone, so server and browser render the same string.
+ */
+export function formatDay(value: string | null | undefined, timeZone: string, opts: { relative?: boolean; now?: Date } = {}): string {
+  const d = parseDbDate(value);
+  if (!d) return "";
+  let tz = timeZone || "UTC";
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+  } catch {
+    tz = "UTC";
+  }
+  const now = opts.now ?? new Date();
+  if (opts.relative !== false) {
+    const k = dayKey(d, tz);
+    if (k === dayKey(now, tz)) return "Today";
+    if (k === dayKey(new Date(now.getTime() - 86_400_000), tz)) return "Yesterday";
+  }
+  const sameYear = dayKey(d, tz).slice(0, 4) === dayKey(now, tz).slice(0, 4);
+  return new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short", month: "short", day: "numeric", ...(sameYear ? {} : { year: "numeric" }) }).format(d);
 }

@@ -155,16 +155,52 @@ export function greetingFor(hour: number): string {
 /* Cadence                                                             */
 /* ------------------------------------------------------------------ */
 
-const MONDAY_FIRST = [1, 2, 3, 4, 5, 6, 0];
+const DEFAULT_DAYS = [2, 3, 4];
+/** Tie-break order when choosing posting days: Tue, Wed, Thu first, then Mon, Fri, weekend. */
+const DAY_PREFERENCE = [2, 3, 4, 1, 5, 6, 0];
+
+function combinations(items: number[], k: number): number[][] {
+  if (k === 0) return [[]];
+  if (items.length < k) return [];
+  const [first, ...rest] = items;
+  return [...combinations(rest, k - 1).map((c) => [first, ...c]), ...combinations(rest, k)];
+}
+
+/** Smallest gap in days between consecutive posting days, wrapping around the week. */
+function minCircularGap(days: number[]): number {
+  if (days.length < 2) return 7;
+  let min = 7;
+  for (let i = 0; i < days.length; i++) {
+    const next = i === days.length - 1 ? days[0] + 7 : days[i + 1];
+    min = Math.min(min, next - days[i]);
+  }
+  return min;
+}
 
 /**
- * Weekdays that carry a posting slot. When `postsPerWeek` is smaller than the number of
- * chosen days, the earliest days of the week (Monday first) win.
+ * Weekdays that carry a posting slot: every chosen day when posts/week covers them, otherwise
+ * the best-spaced subset (ties go to Tue/Wed/Thu). No days → Tue-Thu. Same rule as the
+ * Calendar's planner (lib/calendar/slots.ts `postingDays`), so Today and Calendar agree on
+ * which days are open.
  */
 export function slotWeekdays(cadence: Cadence): Set<number> {
-  const days = MONDAY_FIRST.filter((d) => cadence.days.includes(d));
-  const n = Math.max(0, Math.min(days.length, Math.round(cadence.postsPerWeek)));
-  return new Set(days.slice(0, n));
+  const chosen = [...new Set(cadence.days.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))].sort((a, b) => a - b);
+  const days = chosen.length ? chosen : DEFAULT_DAYS;
+  const want = Math.max(1, Math.min(Math.round(cadence.postsPerWeek) || 1, 7));
+  if (want >= days.length) return new Set(days);
+  let best: number[] = [];
+  let bestGap = -1;
+  let bestPref = Infinity;
+  for (const combo of combinations(days, want)) {
+    const gap = minCircularGap(combo);
+    const pref = combo.reduce((s, d) => s + DAY_PREFERENCE.indexOf(d), 0);
+    if (gap > bestGap || (gap === bestGap && pref < bestPref)) {
+      best = combo;
+      bestGap = gap;
+      bestPref = pref;
+    }
+  }
+  return new Set(best);
 }
 
 /* ------------------------------------------------------------------ */
@@ -186,7 +222,7 @@ export function memoriesNeedingPhoto(memories: SnapshotMemory[]): SnapshotMemory
 
 /** How many ready stories the next two weeks of cadence consume. */
 export function storyBufferTarget(cadence: Cadence): number {
-  return Math.max(1, Math.min(slotWeekdays(cadence).size || cadence.postsPerWeek, 14) * 2);
+  return slotWeekdays(cadence).size * 2;
 }
 
 /** First line of a post (or its angle) for previews. */
@@ -447,7 +483,7 @@ export function computeNextActions(s: DashboardSnapshot): NextAction[] {
       kind: "story",
       title: `Find ${plural(missing, "more story", "more stories")}`,
       detail:
-        `You have ${ready} ready for the next two weeks and post ${plural(slotWeekdays(s.cadence).size || s.cadence.postsPerWeek, "time")} a week. ` +
+        `You have ${ready} ready for the next two weeks and post ${plural(slotWeekdays(s.cadence).size, "time")} a week. ` +
         (pillar ? `Start with ${pillar.name}: it's the thinnest pillar. ` : "") +
         "A 15-minute interview usually gives 1-3 stories.",
       href: pillar ? `/interviews/new?kind=story&pillar=${encodeURIComponent(pillar.id)}` : "/interviews/new?kind=story",
@@ -483,7 +519,8 @@ export function computeNextActions(s: DashboardSnapshot): NextAction[] {
       tone: "green",
     });
   }
-  const open = openSlots(s);
+  // Open slots only mean something once the person has chosen a posting rhythm.
+  const open = s.hasStrategy ? openSlots(s) : [];
   if (open.length > 0) {
     actions.push({
       id: "plan",
@@ -592,20 +629,21 @@ export function buildWeek(s: Pick<DashboardSnapshot, "now" | "timezone" | "caden
   const tz = safeTimezone(s.timezone);
   const todayKey = localDayKey(s.now, tz);
   const slots = slotWeekdays(s.cadence);
-  const byDay = new Map<string, WeekPost[]>();
+  const byDay = new Map<string, (WeekPost & { ts: number })[]>();
   for (const p of s.posts) {
     if (p.status === "archived") continue;
     const at = parseDbDate(p.status === "published" ? (p.publishedAt ?? p.scheduledAt) : p.scheduledAt);
     if (!at) continue;
     const key = localDayKey(at, tz);
     const list = byDay.get(key) ?? [];
-    list.push({ id: p.id, status: p.status, pillar: p.pillar, photoId: p.photoId, hook: hookOf(p, 70), time: formatLocalTime(at, tz) });
+    list.push({ id: p.id, status: p.status, pillar: p.pillar, photoId: p.photoId, hook: hookOf(p, 70), time: formatLocalTime(at, tz), ts: at.getTime() });
     byDay.set(key, list);
   }
   return Array.from({ length: 7 }, (_, i) => {
     const key = addDaysToKey(todayKey, i);
     const wd = weekdayOfKey(key);
-    const posts = byDay.get(key) ?? [];
+    // Earliest first within a day; the timestamp is only for sorting.
+    const posts: WeekPost[] = (byDay.get(key) ?? []).sort((a, b) => a.ts - b.ts).map(({ ts: _ts, ...post }) => post);
     const isSlot = slots.has(wd);
     return {
       key,

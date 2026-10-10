@@ -211,21 +211,44 @@ export function Stat({ label, value, sub, tone = "blue", icon }: { label: ReactN
 /* Sheet (modal)                                                       */
 /* ------------------------------------------------------------------ */
 
+/** Open sheets, topmost last: only the topmost one reacts to Escape. */
+const sheetStack: symbol[] = [];
+
 export function Sheet({ open, onClose, title, children, footer, size = "md" }: { open: boolean; onClose: () => void; title?: ReactNode; children: ReactNode; footer?: ReactNode; size?: "sm" | "md" | "lg" | "xl" }) {
   const [mounted, setMounted] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   useEffect(() => setMounted(true), []);
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    const token = Symbol("sheet");
+    sheetStack.push(token);
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || sheetStack[sheetStack.length - 1] !== token) return;
+      e.stopPropagation();
+      onCloseRef.current();
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+    // Move focus into the sheet so keyboard and screen-reader users land in it.
+    requestAnimationFrame(() => {
+      const el = panelRef.current;
+      if (el && !el.contains(document.activeElement)) el.focus();
+    });
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      const i = sheetStack.indexOf(token);
+      if (i >= 0) sheetStack.splice(i, 1);
+      previouslyFocused?.focus?.();
+    };
+  }, [open]);
   if (!open || !mounted) return null;
   const width = { sm: "max-w-md", md: "max-w-xl", lg: "max-w-3xl", xl: "max-w-5xl" }[size];
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-6" role="dialog" aria-modal="true">
       <div className="absolute inset-0 bg-black/25 backdrop-blur-[2px] animate-in" onClick={onClose} />
-      <div className={cx("glass-strong relative w-full rounded-t-[28px] sm:rounded-window max-h-[92vh] flex flex-col animate-pop", width)}>
+      <div ref={panelRef} tabIndex={-1} className={cx("glass-strong relative w-full rounded-t-[28px] sm:rounded-window max-h-[92vh] flex flex-col animate-pop outline-none", width)}>
         <div className="flex items-center justify-between gap-4 px-6 pt-5 pb-3">
           <div className="t-title-3 min-w-0 truncate">{title}</div>
           <IconButton label="Close" onClick={onClose} className="bg-fill-4">

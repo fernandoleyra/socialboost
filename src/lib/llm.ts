@@ -94,6 +94,20 @@ function ollamaMessages(opts: ChatOptions) {
   return msgs;
 }
 
+/**
+ * Vendor-recommended sampling per model family (Qwen and Gemma publish these).
+ * presence_penalty stays 0 for structured output so JSON keys can repeat.
+ */
+export function familySampling(model: string, task: ModelTask, structured: boolean): Record<string, number> {
+  const m = model.toLowerCase();
+  if (/^(qwen3|qwen2\.5|qwen)/.test(m)) {
+    const presence = structured ? 0 : task === "interviewer" ? 1.0 : task === "writer" ? 0.5 : 0;
+    return { top_p: task === "writer" ? 0.9 : 0.8, top_k: 20, ...(task === "writer" ? { min_p: 0.05 } : {}), presence_penalty: presence };
+  }
+  if (/^(gemma|muse)/.test(m)) return { top_p: 0.95, top_k: 64 };
+  return {};
+}
+
 async function ollamaChat(
   provider: ProviderConfig,
   model: string,
@@ -108,6 +122,7 @@ async function ollamaChat(
     keep_alive: "15m",
     options: {
       num_ctx: extra.numCtx,
+      ...familySampling(model, opts.task, Boolean(extra.format)),
       ...(extra.temperature !== undefined ? { temperature: extra.temperature } : {}),
       ...(opts.maxTokens ? { num_predict: opts.maxTokens } : {}),
     },
@@ -268,7 +283,7 @@ function anthropicParams(provider: ProviderConfig, model: string, opts: ChatOpti
         : m.content,
     }));
   const systemParts = [opts.system, ...opts.messages.filter((m) => m.role === "system").map((m) => m.content)].filter(Boolean);
-  const effort: "high" | "low" = opts.task === "writer" ? "high" : "low";
+  const effort: "medium" | "low" = opts.task === "writer" ? "medium" : "low";
   const isDefaultHost = !provider.baseUrl || /api\.anthropic\.com/.test(provider.baseUrl);
   const fallback = isDefaultHost && supportsFallbacks(model);
   return {
@@ -473,17 +488,39 @@ export async function chatJson<T>(schema: z.ZodType<T>, opts: ChatOptions): Prom
   throw new LLMError(`The model couldn't produce valid structured output: ${lastErr}`, "Try a larger model for this task in Settings → Models.");
 }
 
-/** Embed texts with the embedding route. Returns null when no embedding model is configured/available. */
-export async function embed(texts: string[]): Promise<number[][] | null> {
+/**
+ * Asymmetric retrieval prefixes. Each embedding family was trained with its own
+ * query/document markers; using them noticeably improves search quality.
+ */
+export function embeddingPrefix(model: string, kind: "query" | "document"): string {
+  const m = model.toLowerCase();
+  if (m.startsWith("embeddinggemma")) return kind === "query" ? "task: search result | query: " : "title: none | text: ";
+  if (m.startsWith("nomic-embed")) return kind === "query" ? "search_query: " : "search_document: ";
+  if (m.startsWith("qwen3-embedding")) return kind === "query" ? "Instruct: Given a search query, retrieve relevant personal stories and posts\nQuery: " : "";
+  if (m.startsWith("mxbai-embed")) return kind === "query" ? "Represent this sentence for searching relevant passages: " : "";
+  return "";
+}
+
+/**
+ * Embed texts with the embedding route. `kind: "query"` for search queries, `"document"`
+ * (default) for stored items. Returns null when no embedding model is configured/available
+ * or it doesn't answer within `timeoutMs`.
+ */
+export async function embed(texts: string[], opts: { kind?: "query" | "document"; timeoutMs?: number } = {}): Promise<number[][] | null> {
   const r = getRoute("embedding");
-  if (!r || texts.length === 0) return texts.length === 0 ? [] : null;
+  if (texts.length === 0) return [];
+  if (!r) return null;
   const { route, provider } = r;
+  const prefix = embeddingPrefix(route.model, opts.kind ?? "document");
+  const input = prefix ? texts.map((t) => prefix + t) : texts;
+  const signal = AbortSignal.timeout(opts.timeoutMs ?? 60000);
   try {
     if (provider.kind === "ollama") {
       const res = await fetch(`${trimSlash(provider.baseUrl)}/api/embed`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: route.model, input: texts, keep_alive: "15m" }),
+        body: JSON.stringify({ model: route.model, input, keep_alive: "15m" }),
+        signal,
       });
       if (!res.ok) return null;
       const json = (await res.json()) as { embeddings?: number[][] };
@@ -493,7 +530,8 @@ export async function embed(texts: string[]): Promise<number[][] | null> {
       const res = await fetch(`${trimSlash(provider.baseUrl)}/embeddings`, {
         method: "POST",
         headers: { "content-type": "application/json", ...(provider.apiKey ? { authorization: `Bearer ${provider.apiKey}` } : {}) },
-        body: JSON.stringify({ model: route.model, input: texts }),
+        body: JSON.stringify({ model: route.model, input }),
+        signal,
       });
       if (!res.ok) return null;
       const json = (await res.json()) as { data?: { embedding: number[] }[] };
@@ -506,10 +544,12 @@ export async function embed(texts: string[]): Promise<number[][] | null> {
 }
 
 export function cosine(a: number[], b: number[]): number {
+  // Vectors from different models/dimensions are not comparable.
+  if (a.length !== b.length || a.length === 0) return 0;
   let dot = 0;
   let na = 0;
   let nb = 0;
-  const n = Math.min(a.length, b.length);
+  const n = a.length;
   for (let i = 0; i < n; i++) {
     dot += a[i] * b[i];
     na += a[i] * a[i];

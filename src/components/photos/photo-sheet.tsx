@@ -112,6 +112,15 @@ export function PhotoSheet({
     }
   };
 
+  // Escape closes the sheet without blurring the field, so save any typed caption or note here too.
+  const close = () => {
+    const body: Record<string, string> = {};
+    if (caption.trim() !== photo.caption) body.caption = caption;
+    if (note.trim() !== photo.userNote) body.userNote = note;
+    if (Object.keys(body).length) void patch(body);
+    onClose();
+  };
+
   const remove = async () => {
     await api(`/api/photos/${photo.id}`, { method: "DELETE" });
     onDeleted(photo.id);
@@ -127,7 +136,7 @@ export function PhotoSheet({
     <>
       <Sheet
         open={open}
-        onClose={onClose}
+        onClose={close}
         size="lg"
         title={photo.memoryTitle ? `Photo · ${photo.memoryTitle}` : "Photo"}
         footer={

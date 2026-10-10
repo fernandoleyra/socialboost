@@ -6,6 +6,8 @@ const nextConfig: NextConfig = {
   serverExternalPackages: ["better-sqlite3", "sharp"],
   experimental: {
     serverActions: { bodySizeLimit: "25mb" },
+    // proxy.ts (optional password gate) buffers request bodies; keep photo uploads intact.
+    proxyClientMaxBodySize: "30mb",
   },
 };
 

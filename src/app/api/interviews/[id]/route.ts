@@ -1,8 +1,7 @@
-import { handle, ok } from "@/lib/http";
+import { HttpError, handle, ok } from "@/lib/http";
 import { deleteInterview, getStrategy, requireProfile, updateInterview } from "@/lib/repo";
 import { PatchInterviewBody } from "@/lib/interview/schemas";
 import { deleteInterviewData, getOwnedInterview, loadInterviewView } from "@/lib/interview/service";
-import { HttpError } from "@/lib/http";
 
 export const dynamic = "force-dynamic";
 

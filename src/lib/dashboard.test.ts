@@ -8,6 +8,7 @@ import {
   localDayKey,
   localParts,
   neediestPillar,
+  nextScheduled,
   openSlots,
   parseDbDate,
   pillarBalance,
@@ -120,15 +121,20 @@ describe("time helpers", () => {
 });
 
 describe("cadence", () => {
-  it("caps slot days to posts per week, Monday first", () => {
-    expect([...slotWeekdays({ postsPerWeek: 3, days: [1, 2, 3, 4, 5], time: "08:30" })]).toEqual([1, 2, 3]);
+  it("caps slot days to posts per week, picking the best-spaced days like the calendar", () => {
+    // Mon/Wed/Fri keeps a free day between posts; Mon/Tue/Wed would not.
+    expect([...slotWeekdays({ postsPerWeek: 3, days: [1, 2, 3, 4, 5], time: "08:30" })]).toEqual([1, 3, 5]);
     expect([...slotWeekdays({ postsPerWeek: 2, days: [0, 6, 1], time: "08:30" })]).toEqual([1, 6]);
+    // Equal spacing → Tue/Wed/Thu preference wins.
+    expect([...slotWeekdays({ postsPerWeek: 1, days: [1, 3, 5], time: "08:30" })]).toEqual([3]);
     expect(slotWeekdays({ postsPerWeek: 5, days: [2, 4], time: "08:30" }).size).toBe(2);
+    expect([...slotWeekdays({ postsPerWeek: 3, days: [], time: "08:30" })]).toEqual([2, 3, 4]);
   });
 
   it("targets two weeks of stories", () => {
     expect(storyBufferTarget({ postsPerWeek: 3, days: [2, 3, 4], time: "08:30" })).toBe(6);
-    expect(storyBufferTarget({ postsPerWeek: 4, days: [], time: "08:30" })).toBe(8);
+    expect(storyBufferTarget({ postsPerWeek: 5, days: [1, 2, 3, 4, 5], time: "08:30" })).toBe(10);
+    expect(storyBufferTarget({ postsPerWeek: 4, days: [], time: "08:30" })).toBe(6);
   });
 
   it("finds open slots in the next 14 days and skips taken days", () => {
@@ -190,7 +196,7 @@ describe("next best actions", () => {
   it("walks a brand-new profile through setup in funnel order", () => {
     const s = snap({ hasStrategy: false, pillars: [], voice: { ownSamples: 0, analyzed: false } });
     const kinds = computeNextActions(s).map((a) => a.kind);
-    expect(kinds).toEqual(["positioning", "voice-import", "story", "plan"]);
+    expect(kinds).toEqual(["positioning", "voice-import", "story"]);
     expect(computeNextActions(s)[0].href).toBe("/interviews/new?kind=positioning&auto=1");
   });
 
@@ -307,6 +313,20 @@ describe("pipeline stats and week", () => {
     expect(week[3]).toMatchObject({ weekday: "Tue", isSlot: true, open: false });
     expect(week[3].posts[0]).toMatchObject({ hook: "First line", time: "8:30 AM", pillar: "a" });
     expect(week[4]).toMatchObject({ weekday: "Wed", isSlot: true, open: true, posts: [] });
+  });
+
+  it("finds the next upcoming post, skipping past, published and archived ones", () => {
+    const s = snap({
+      posts: [
+        post("past", { status: "scheduled", scheduledAt: "2026-10-09T06:30:00.000Z" }),
+        post("pub", { status: "published", scheduledAt: "2026-10-11T06:30:00.000Z" }),
+        post("arch", { status: "archived", scheduledAt: "2026-10-11T07:30:00.000Z" }),
+        post("later", { status: "idea", scheduledAt: "2026-10-15T06:30:00.000Z" }),
+        post("next", { status: "approved", scheduledAt: "2026-10-13T06:30:00.000Z" }),
+      ],
+    });
+    expect(nextScheduled(s)?.post.id).toBe("next");
+    expect(nextScheduled(snap())).toBeNull();
   });
 
   it("previews hooks from the first non-empty line", () => {

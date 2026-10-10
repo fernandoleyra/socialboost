@@ -18,8 +18,12 @@ export function useAutosave<T>(opts: { url: string; method?: "PUT" | "PATCH" | "
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlight = useRef(false);
   const again = useRef(false);
+  /** True while saves keep failing, so the error toast shows once per streak, not on every keystroke pause. */
+  const failing = useRef(false);
   const onError = useRef(opts.onError);
-  onError.current = opts.onError;
+  useEffect(() => {
+    onError.current = opts.onError;
+  });
 
   const flush = useCallback(async () => {
     if (timer.current) {
@@ -35,7 +39,12 @@ export function useAutosave<T>(opts: { url: string; method?: "PUT" | "PATCH" | "
     dirty.current = false;
     setState("saving");
     try {
-      const res = await fetch(url, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(latest.current) });
+      let res: Response;
+      try {
+        res = await fetch(url, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(latest.current) });
+      } catch {
+        throw new Error("Couldn't reach SocialBoost. Is the app still running? Your edits are kept in this tab.");
+      }
       if (!res.ok) {
         let msg = `Couldn't save (${res.status})`;
         try {
@@ -46,6 +55,7 @@ export function useAutosave<T>(opts: { url: string; method?: "PUT" | "PATCH" | "
         }
         throw new Error(msg);
       }
+      failing.current = false;
       setError(null);
       setState(dirty.current || again.current ? "pending" : "saved");
     } catch (e) {
@@ -53,7 +63,8 @@ export function useAutosave<T>(opts: { url: string; method?: "PUT" | "PATCH" | "
       const msg = e instanceof Error ? e.message : "Couldn't save";
       setError(msg);
       setState("error");
-      onError.current?.(msg);
+      if (!failing.current) onError.current?.(msg);
+      failing.current = true;
     } finally {
       inFlight.current = false;
       if (again.current) {

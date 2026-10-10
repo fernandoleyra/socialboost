@@ -157,6 +157,14 @@ export function tasksUsingProvider(settings: AISettings, providerId: string): Mo
   return TASK_ORDER.filter((t) => settings.routes[t]?.providerId === providerId);
 }
 
+/** Tasks pointed at a provider but with no model name yet (saving those would break every call). */
+export function routesMissingModel(settings: AISettings): ModelTask[] {
+  return TASK_ORDER.filter((t) => {
+    const r = settings.routes[t];
+    return !!r && !r.model.trim();
+  });
+}
+
 /** Basic sanity check for a provider form. Returns an error message or null. */
 export function validateProvider(p: Pick<ProviderConfig, "kind" | "label" | "baseUrl" | "apiKey">): string | null {
   if (!p.label.trim()) return "Give this provider a name.";

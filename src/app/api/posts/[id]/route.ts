@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { logActivity } from "@/lib/db";
+import { readBody } from "@/lib/factory/request";
 import { handle, ok, HttpError } from "@/lib/http";
 import { deletePost, getPhoto, requireProfile, updatePost } from "@/lib/repo";
 import { POST_STATUSES, type Post } from "@/lib/types";
@@ -47,7 +48,7 @@ export const PATCH = handle(async (req: Request, ctx: Ctx) => {
   const profile = requireProfile();
   const { id } = await ctx.params;
   let post = requirePost(profile.id, id);
-  const patch = Patch.parse(await req.json());
+  const patch = await readBody(req, Patch);
 
   if (patch.scheduledAt && Number.isNaN(Date.parse(patch.scheduledAt))) throw new HttpError(400, "That date doesn't look right.");
   if (patch.photoId) {
@@ -59,7 +60,6 @@ export const PATCH = handle(async (req: Request, ctx: Ctx) => {
     throw new HttpError(409, "This post is already published.", "Edit it on LinkedIn; changes here wouldn't reach your feed.");
   }
 
-  const nextStatus = patch.status ?? post.status;
   const nextBody = patch.body ?? post.body;
   const nextScheduled = patch.scheduledAt !== undefined ? patch.scheduledAt : post.scheduledAt;
   if (patch.status && patch.status !== post.status) {
@@ -80,7 +80,7 @@ export const PATCH = handle(async (req: Request, ctx: Ctx) => {
     if (typeof patch.angle === "string") update.angle = patch.angle.trim().startsWith("{") ? patch.angle : serializeAngleField({ ...field, note: patch.angle });
     else {
       const [a] = normalizeAngles([patch.angle], field.selected?.structureId ?? "scene-lesson", 1);
-      if (!a) throw new HttpError(400, "The angle needs a hook or a takeaway.");
+      if (!a) throw new HttpError(400, "The angle needs a hook.");
       update.angle = serializeAngleField({ ...field, selected: a });
     }
   }
@@ -90,7 +90,6 @@ export const PATCH = handle(async (req: Request, ctx: Ctx) => {
   }
   if (Object.keys(update).length) post = updatePost(post.id, update);
 
-  if (patch.status && patch.status !== nextStatus) throw new HttpError(500, "Status update failed");
   if (update.status === "approved" || update.status === "scheduled" || update.status === "review") {
     const when = update.status === "scheduled" && post.scheduledAt ? ` for ${new Date(post.scheduledAt).toUTCString().slice(0, 22)} UTC` : "";
     logActivity("post", `${STATUS_META[update.status].label}${when}: ${postLabel(post)}`, { profileId: profile.id, refId: post.id });

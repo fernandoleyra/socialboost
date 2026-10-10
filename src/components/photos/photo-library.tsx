@@ -59,6 +59,15 @@ function PhotoCard({ photo, onOpen }: { photo: PhotoView; onOpen: () => void }) 
   );
 }
 
+function SegmentLabel({ label, count }: { label: string; count: number }) {
+  return (
+    <span className="flex items-center gap-1.5">
+      {label}
+      {count > 0 && <span className="tabular-nums text-label-3">{count}</span>}
+    </span>
+  );
+}
+
 /** The photo library: bulk upload, captions from the vision model, linking photos to stories. */
 export function PhotoLibrary({
   initialPhotos,
@@ -145,15 +154,18 @@ export function PhotoLibrary({
       ) : (
         <section className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <Segmented
-              value={filter}
-              onChange={setFilter}
-              options={[
-                { value: "all", label: `All ${photos.length}` },
-                { value: "unassigned", label: `Not in a story ${unassigned}` },
-                { value: "linked", label: `In a story ${photos.length - unassigned}` },
-              ]}
-            />
+            <div className="-mx-1 max-w-full overflow-x-auto px-1 pb-1">
+              <Segmented
+                value={filter}
+                onChange={setFilter}
+                className="w-max whitespace-nowrap"
+                options={[
+                  { value: "all", label: <SegmentLabel label="All" count={photos.length} /> },
+                  { value: "unassigned", label: <SegmentLabel label="Not in a story" count={unassigned} /> },
+                  { value: "linked", label: <SegmentLabel label="In a story" count={photos.length - unassigned} /> },
+                ]}
+              />
+            </div>
             {unassigned > 0 && filter !== "unassigned" && (
               <p className="t-footnote text-label-2">
                 {unassigned === 1 ? "1 photo isn't" : `${unassigned} photos aren't`} linked to a story yet. Open one to link it.

@@ -38,15 +38,17 @@ export function MemoryPicker({
         <Search className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-label-3" />
         <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a story" className="pl-10!" aria-label="Find a story" disabled={disabled} />
       </div>
-      <div className="card list-group max-h-64 overflow-y-auto" role="listbox" aria-label="Stories">
-        {onCreateNew && (
+      {onCreateNew && (
+        <div className="card list-group">
           <button type="button" className="list-row w-full text-left text-accent hover:bg-fill-4" onClick={onCreateNew} disabled={disabled}>
             <span className="grid size-9 shrink-0 place-items-center rounded-[10px] bg-fill-3">
               <Plus className="size-4" />
             </span>
             <span className="t-subhead font-medium">New story from this photo</span>
           </button>
-        )}
+        </div>
+      )}
+      <div className="card list-group max-h-64 overflow-y-auto" role="listbox" aria-label="Stories">
         <button type="button" role="option" aria-selected={value === null} className="list-row w-full text-left hover:bg-fill-4" onClick={() => onChange(null)} disabled={disabled}>
           <span className="grid size-9 shrink-0 place-items-center rounded-[10px] bg-fill-3 text-label-3">
             <Library className="size-4" />
@@ -81,8 +83,16 @@ export function MemoryPicker({
             {m.id === value && <Check className="size-4 shrink-0 text-accent" />}
           </button>
         ))}
-        {shown.length === 0 && q && <div className="list-row t-footnote text-label-2">No story matches “{q}”.</div>}
-        {memories.length === 0 && !q && <div className="list-row t-footnote text-label-2">No stories yet. Run a story interview to add some.</div>}
+        {shown.length === 0 && q && (
+          <div className="list-row t-footnote text-label-2" role="presentation">
+            No story matches “{q}”.
+          </div>
+        )}
+        {memories.length === 0 && !q && (
+          <div className="list-row t-footnote text-label-2" role="presentation">
+            No stories yet. Run a story interview to add some.
+          </div>
+        )}
       </div>
     </div>
   );

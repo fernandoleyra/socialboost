@@ -11,6 +11,7 @@ import {
   keepVerbatimQuotes,
   parseDbDate,
   truncate,
+  formatDay,
 } from "./text";
 
 async function collect(pieces: string[], opts = { singleQuestion: true, maxChars: 400 }) {
@@ -150,5 +151,21 @@ describe("misc", () => {
   it("truncates on whitespace-normalized text", () => {
     expect(truncate("a  b\n c", 10)).toBe("a b c");
     expect(truncate("abcdefghijkl", 5)).toBe("abcd…");
+  });
+});
+
+describe("formatDay", () => {
+  const now = new Date("2026-10-10T12:00:00Z");
+  it("is relative in the given time zone", () => {
+    expect(formatDay("2026-10-10 08:00:00", "Europe/Zurich", { now })).toBe("Today");
+    expect(formatDay("2026-10-09T22:30:00Z", "Europe/Zurich", { now })).toBe("Today");
+    expect(formatDay("2026-10-09 08:00:00", "UTC", { now })).toBe("Yesterday");
+    expect(formatDay("2026-10-06 08:00:00", "UTC", { now })).toBe("Tue, Oct 6");
+    expect(formatDay("2025-10-06 08:00:00", "UTC", { now })).toBe("Mon, Oct 6, 2025");
+  });
+  it("can skip relative labels and survives bad zones", () => {
+    expect(formatDay("2026-10-10 08:00:00", "UTC", { now, relative: false })).toBe("Sat, Oct 10");
+    expect(formatDay("2026-10-10 08:00:00", "Not/AZone", { now, relative: false })).toBe("Sat, Oct 10");
+    expect(formatDay(null, "UTC")).toBe("");
   });
 });

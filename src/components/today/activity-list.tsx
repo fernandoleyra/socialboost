@@ -43,7 +43,8 @@ export function ActivityList({ items, now }: { items: ActivityItem[]; now: Date 
           {items.map((a) => {
             const k = kindOf(a.kind);
             const Icon = k.icon;
-            const when = formatDistanceStrict(new Date(a.at), now, { addSuffix: true });
+            const at = new Date(a.at);
+            const when = now.getTime() - at.getTime() < 60_000 ? "just now" : formatDistanceStrict(at, now, { addSuffix: true });
             const body = (
               <>
                 <span className="grid size-8 shrink-0 place-items-center rounded-full" style={toneWell(k.tone)}>

@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import Link from "next/link";
 import { ArrowLeft, ArrowRight, Camera, CircleCheck, Clock, Compass, Feather, Library, Mic, RefreshCw, TriangleAlert, Zap } from "lucide-react";
 import type { AISettings } from "@/lib/types";
 import { Button, Field, Input, Select, api, cx, toast } from "@/components/ui";
 import { HealthList } from "@/components/settings/health-list";
-import { LANGUAGES, browserLanguage, browserTimezone, normalizeLinkedInUrl, timezoneOptions } from "@/components/settings/options";
+import { LANGUAGES, browserLanguage, browserTimezone, normalizeLinkedInUrl } from "@/components/settings/options";
+import { useTimezoneOptions } from "@/components/settings/use-timezones";
 import { activePreset, applyPreset, type HealthReport } from "@/components/settings/presets";
 
 type Step = "intro" | "about" | "models" | "angle";
@@ -56,7 +57,7 @@ export function WelcomeFlow({ adding }: { adding: boolean }) {
   const [creating, setCreating] = useState(false);
   const [created, setCreated] = useState<{ id: string; name: string } | null>(null);
   const [touched, setTouched] = useState(false);
-  const zones = useMemo(() => timezoneOptions(timezone), [timezone]);
+  const zones = useTimezoneOptions(timezone);
 
   useEffect(() => {
     setTimezone(browserTimezone());
@@ -111,7 +112,7 @@ export function WelcomeFlow({ adding }: { adding: boolean }) {
     if (step === "models" && !report && !checking && !checkError) void check();
   }, [step, report, checking, checkError, check]);
 
-  const useLight = async () => {
+  const switchToLight = async () => {
     if (!ai) return;
     setApplying(true);
     try {
@@ -299,6 +300,15 @@ export function WelcomeFlow({ adding }: { adding: boolean }) {
                       </p>
                     </div>
                   )}
+                  {report.providers.some((p) => p.kind === "ollama" && !p.ok) && (
+                    <p className="t-footnote text-label-2">
+                      New to Ollama? Install it from{" "}
+                      <a href="https://ollama.com/download" target="_blank" rel="noreferrer" className="font-medium text-accent hover:underline">
+                        ollama.com/download
+                      </a>
+                      , open it, then press Check again. We'll show the exact models to download.
+                    </p>
+                  )}
                   <HealthList report={report} compact />
                   {ai && activePreset(ai) !== "light" && !report.summary.ready && (
                     <div className="flex flex-wrap items-center justify-between gap-3 rounded-inner border border-separator p-4">
@@ -309,7 +319,7 @@ export function WelcomeFlow({ adding }: { adding: boolean }) {
                           <p className="t-footnote text-label-2">Switch to smaller models (Qwen3 4B, Gemma 3 4B). Faster downloads, a little less polish.</p>
                         </div>
                       </div>
-                      <Button size="sm" variant="tinted" onClick={useLight} loading={applying}>
+                      <Button size="sm" variant="tinted" onClick={switchToLight} loading={applying}>
                         Use light models
                       </Button>
                     </div>

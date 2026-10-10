@@ -19,7 +19,9 @@ export function setSetting(key: string, value: unknown) {
  */
 export function defaultAISettings(): AISettings {
   const ollamaUrl = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
-  const writer = process.env.SOCIALBOOST_WRITER_MODEL || "qwen3:14b";
+  // One natively multimodal model for every text task and vision, so Ollama never swaps
+  // models mid-interview (see docs/MODELS.md for the light / multilingual / pro presets).
+  const writer = process.env.SOCIALBOOST_WRITER_MODEL || "gemma4:12b";
   const fast = process.env.SOCIALBOOST_FAST_MODEL || writer;
   const providers: AISettings["providers"] = [
     { id: "ollama", kind: "ollama", label: "Ollama (local)", baseUrl: ollamaUrl, apiKey: "" },
@@ -49,8 +51,8 @@ export function defaultAISettings(): AISettings {
       extractor: { providerId: "ollama", model: fast, temperature: 0.2 },
       writer: { providerId: "ollama", model: writer, temperature: 0.8 },
       critic: { providerId: "ollama", model: fast, temperature: 0.2 },
-      vision: { providerId: "ollama", model: process.env.SOCIALBOOST_VISION_MODEL || "qwen2.5vl:7b", temperature: 0.2 },
-      embedding: { providerId: "ollama", model: process.env.SOCIALBOOST_EMBED_MODEL || "nomic-embed-text" },
+      vision: { providerId: "ollama", model: process.env.SOCIALBOOST_VISION_MODEL || writer, temperature: 0.2 },
+      embedding: { providerId: "ollama", model: process.env.SOCIALBOOST_EMBED_MODEL || "embeddinggemma" },
       transcription: process.env.STT_BASE_URL ? { providerId: "stt", model: process.env.STT_MODEL || "Systran/faster-whisper-small" } : null,
     },
     numCtx: Number(process.env.SOCIALBOOST_NUM_CTX || 8192),
@@ -69,7 +71,16 @@ export function getAISettings(): AISettings {
 }
 
 export function saveAISettings(settings: AISettings) {
-  setSetting("ai", AISettingsSchema.parse(settings));
+  const prev = getAISettings().routes.embedding;
+  const next = AISettingsSchema.parse(settings);
+  setSetting("ai", next);
+  // Vectors from different embedding models aren't comparable (even at equal dimensions).
+  // Drop them; memory search and voice retrieval re-embed lazily with the new model.
+  const cur = next.routes.embedding;
+  if ((prev?.providerId ?? null) !== (cur?.providerId ?? null) || (prev?.model ?? null) !== (cur?.model ?? null)) {
+    const db = getDb();
+    db.exec(`UPDATE memories SET embedding = NULL; UPDATE voice_samples SET embedding = NULL;`);
+  }
 }
 
 export function getRoute(task: ModelTask) {
@@ -88,4 +99,28 @@ export function getActiveProfileId(): string | null {
 
 export function setActiveProfileId(id: string) {
   setSetting("activeProfileId", id);
+}
+
+/* ------------------------------------------------------------------ */
+/* API keys never leave the server in clear text                       */
+/* ------------------------------------------------------------------ */
+
+const MASK = "••••";
+export const isMaskedKey = (k: string) => k.startsWith(MASK);
+const maskKey = (k: string) => (k ? MASK + (k.length > 8 ? k.slice(-4) : "") : "");
+
+/** Settings safe to send to the browser: API keys replaced by a mask showing the last 4 chars. */
+export function maskAISettings(s: AISettings): AISettings {
+  return { ...s, providers: s.providers.map((p) => ({ ...p, apiKey: maskKey(p.apiKey) })) };
+}
+
+/** Swap masked keys coming back from the browser for the stored ones (matched by provider id). */
+export function unmaskProvider<T extends { id: string; apiKey: string }>(p: T): T {
+  if (!isMaskedKey(p.apiKey)) return p;
+  const stored = getAISettings().providers.find((x) => x.id === p.id);
+  return { ...p, apiKey: stored?.apiKey ?? "" };
+}
+
+export function unmaskAISettings(s: AISettings): AISettings {
+  return { ...s, providers: s.providers.map(unmaskProvider) };
 }

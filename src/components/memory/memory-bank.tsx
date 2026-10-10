@@ -174,7 +174,7 @@ export function MemoryBank({
                   onChange={(e) => setQ(e.target.value)}
                   placeholder="Search by meaning: “the time a client said no”"
                   aria-label="Search stories"
-                  className="field rounded-full! pl-10! pr-10!"
+                  className="field rounded-full! pl-10! pr-10! [&::-webkit-search-cancel-button]:appearance-none"
                 />
                 <span className="absolute right-2 top-1/2 -translate-y-1/2">
                   {loading && searching ? (
@@ -187,7 +187,7 @@ export function MemoryBank({
                 </span>
               </div>
               <div className="-mx-1 overflow-x-auto px-1 pb-1 lg:ml-auto">
-                <Segmented value={filter} onChange={setFilter} options={filterOptions} />
+                <Segmented value={filter} onChange={setFilter} options={filterOptions} className="w-max whitespace-nowrap" />
               </div>
             </div>
 
@@ -204,8 +204,8 @@ export function MemoryBank({
               </div>
             )}
 
-            {searching && !loading && (
-              <p className="px-1 t-footnote text-label-2">
+            {searching && !loading && mode !== "list" && (
+              <p className="px-1 t-footnote text-label-2" aria-live="polite">
                 {mode === "semantic" ? (
                   <>Best matches by meaning and keywords.</>
                 ) : (
@@ -332,7 +332,7 @@ function FilteredEmpty({ filter, query, pillar, onClear, onAdd }: { filter: Memo
     <EmptyState
       icon={<Library />}
       title={pillar ? `No ${filter === "ready" ? "ready " : ""}stories for ${pillar.name} yet` : filter === "ready" ? "No stories ready to write" : "No stories here"}
-      body={pillar ? "A short story interview focused on this pillar will fill the gap." : "Run a story interview, or open a draft story and fill in what's missing."}
+      body={pillar ? "A short story interview focused on this pillar will fill the gap." : "Run a story interview, or open a story marked In progress and fill in what's missing."}
       action={
         <div className="flex flex-wrap justify-center gap-2">
           <Link href={storyInterviewHref(pillar?.id)} className="btn btn-primary">

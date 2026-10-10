@@ -74,11 +74,21 @@ export function Avatar({ name, size = 32 }: { name: string; size?: number }) {
 function ThemeToggle() {
   const [theme, setTheme] = useState<"light" | "dark" | "system">("system");
   useEffect(() => {
-    try {
-      setTheme((localStorage.getItem("sb-theme") as typeof theme) || "system");
-    } catch {
-      /* ignore */
-    }
+    const read = () => {
+      try {
+        setTheme((localStorage.getItem("sb-theme") as typeof theme) || "system");
+      } catch {
+        /* ignore */
+      }
+    };
+    read();
+    // Stay in sync with Settings → Appearance (same tab) and other tabs.
+    window.addEventListener("sb-theme-change", read);
+    window.addEventListener("storage", read);
+    return () => {
+      window.removeEventListener("sb-theme-change", read);
+      window.removeEventListener("storage", read);
+    };
   }, []);
   const apply = (t: typeof theme) => {
     setTheme(t);
@@ -89,6 +99,7 @@ function ThemeToggle() {
     }
     const dark = t === "dark" || (t === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
     document.documentElement.dataset.theme = dark ? "dark" : "light";
+    window.dispatchEvent(new Event("sb-theme-change"));
   };
   const opts = [
     { v: "light" as const, icon: Sun, label: "Light" },

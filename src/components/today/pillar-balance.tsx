@@ -13,7 +13,7 @@ export function PillarBalance({ rows, storyTarget }: { rows: PillarBalanceRow[];
           <h2 id="balance-title" className="t-title-3">
             Pillar balance
           </h2>
-          <p className="t-footnote mt-0.5 text-label-2">Ready stories per pillar against the mix you want.</p>
+          <p className="t-footnote mt-0.5 text-label-2">Stories ready to write (not yet planned) against the mix you want.</p>
         </div>
         <Link href="/strategy" className="btn btn-plain btn-sm shrink-0">
           Strategy
@@ -42,7 +42,7 @@ export function PillarBalance({ rows, storyTarget }: { rows: PillarBalanceRow[];
                   <span className="size-2.5 shrink-0 rounded-full" style={{ background: color }} />
                   <span className="min-w-0 flex-1 truncate t-subhead font-semibold">{r.name}</span>
                   <span className="t-footnote tabular-nums text-label-2">
-                    {r.ready} {r.ready === 1 ? "story" : "stories"}
+                    {r.ready} ready
                   </span>
                 </div>
                 <div
@@ -56,7 +56,7 @@ export function PillarBalance({ rows, storyTarget }: { rows: PillarBalanceRow[];
                 </div>
                 <div className="flex items-center justify-between gap-2 t-caption text-label-2">
                   <span>
-                    Target {pct(r.targetShare)} · stories {pct(r.storyShare)}
+                    Target {pct(r.targetShare)} · ready stories {pct(r.storyShare)}
                   </span>
                   {low && (
                     <Link
@@ -64,7 +64,7 @@ export function PillarBalance({ rows, storyTarget }: { rows: PillarBalanceRow[];
                       className="inline-flex items-center gap-1 font-semibold text-sys-orange hover:underline"
                     >
                       <Mic className="size-3" />
-                      {r.state === "empty" ? "No stories yet" : `Needs ~${Math.ceil(r.gap)} more`}
+                      {r.state === "empty" ? "None ready" : `Needs ~${Math.ceil(r.gap)} more`}
                     </Link>
                   )}
                 </div>

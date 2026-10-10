@@ -1,11 +1,12 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Trash2 } from "lucide-react";
 import { Button, Input, Select, Sheet, api, toast } from "@/components/ui";
 import { Group, Row } from "./grouped";
-import { LANGUAGES, normalizeLinkedInUrl, timezoneOptions } from "./options";
+import { LANGUAGES, normalizeLinkedInUrl } from "./options";
+import { useTimezoneOptions } from "./use-timezones";
 
 export type ProfileForm = { id: string; name: string; headline: string; linkedinUrl: string; language: string; timezone: string };
 
@@ -16,7 +17,7 @@ export function ProfileSection({ profile, otherProfiles }: { profile: ProfileFor
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const zones = useMemo(() => timezoneOptions(form.timezone), [form.timezone]);
+  const zones = useTimezoneOptions(form.timezone);
 
   const dirty = (Object.keys(form) as (keyof ProfileForm)[]).some((k) => form[k] !== saved[k]);
   const linkedIn = normalizeLinkedInUrl(form.linkedinUrl);
@@ -30,6 +31,12 @@ export function ProfileSection({ profile, otherProfiles }: { profile: ProfileFor
       const body = { name: form.name.trim(), headline: form.headline.trim(), linkedinUrl: linkedIn, language: form.language, timezone: form.timezone };
       const { profile: p } = await api<{ profile: ProfileForm }>(`/api/profiles/${profile.id}`, { method: "PATCH", json: body });
       const next = { id: p.id, name: p.name, headline: p.headline, linkedinUrl: p.linkedinUrl, language: p.language, timezone: p.timezone };
+      // Keep the strategy's post language in step with the profile (only if a strategy exists).
+      if (next.language !== saved.language) {
+        const url = `/api/strategy?profileId=${encodeURIComponent(profile.id)}`;
+        const { strategy } = await api<{ strategy: { language: string } | null }>(url);
+        if (strategy && strategy.language !== next.language) await api(url, { method: "PUT", json: { language: next.language } });
+      }
       setSaved(next);
       setForm(next);
       toast("Profile saved");

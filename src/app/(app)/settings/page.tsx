@@ -1,13 +1,16 @@
+import type { Metadata } from "next";
 import { PageHeader } from "@/components/ui";
 import { DATA_DIR } from "@/lib/db";
-import { listProfiles, requireProfile } from "@/lib/repo";
-import { getAISettings } from "@/lib/settings";
+import { redirect } from "next/navigation";
+import { getActiveProfile, listProfiles } from "@/lib/repo";
+import { getAISettings, maskAISettings } from "@/lib/settings";
 import { ProfileSection } from "@/components/settings/profile-section";
 import { ModelsSection } from "@/components/settings/models-section";
 import { DataSection, PublishingSection } from "@/components/settings/data-section";
 import { AppearanceSection } from "@/components/settings/appearance-section";
 
 export const dynamic = "force-dynamic";
+export const metadata: Metadata = { title: "Settings — SocialBoost" };
 
 const JUMP = [
   { href: "#profile", label: "Profile" },
@@ -18,7 +21,8 @@ const JUMP = [
 ];
 
 export default function SettingsPage() {
-  const profile = requireProfile();
+  const profile = getActiveProfile();
+  if (!profile) redirect("/welcome");
   const others = listProfiles().filter((p) => p.id !== profile.id).length;
 
   return (
@@ -33,11 +37,13 @@ export default function SettingsPage() {
         ))}
       </nav>
 
+      {/* Keyed by profile: after switching people the form must start from the new person, not keep the old one's edits. */}
       <ProfileSection
+        key={profile.id}
         profile={{ id: profile.id, name: profile.name, headline: profile.headline, linkedinUrl: profile.linkedinUrl, language: profile.language, timezone: profile.timezone }}
         otherProfiles={others}
       />
-      <ModelsSection initial={getAISettings()} />
+      <ModelsSection initial={maskAISettings(getAISettings())} />
       <PublishingSection />
       <DataSection profileName={profile.name} dataDir={DATA_DIR} />
       <AppearanceSection />

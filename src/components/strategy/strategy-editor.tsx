@@ -55,6 +55,17 @@ function SaveIndicator({ state, error, onRetry }: { state: SaveState; error: str
   return <span className="chip">Changes save automatically</span>;
 }
 
+/** Like Field, but a group (not a <label>) because list editors hold several controls. */
+function ListField({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+  return (
+    <div className="space-y-1.5">
+      <div className="px-1 t-footnote font-semibold text-label-2">{label}</div>
+      {children}
+      {hint && <p className="px-1 t-caption text-label-3">{hint}</p>}
+    </div>
+  );
+}
+
 function Block({ id, title, subtitle, children }: { id: string; title: string; subtitle: ReactNode; children: ReactNode }) {
   return (
     <section id={id} className="scroll-mt-24 space-y-3">
@@ -68,12 +79,15 @@ function Block({ id, title, subtitle, children }: { id: string; title: string; s
 }
 
 export function StrategyEditor({
+  profileId,
   initial,
   language,
   timezone,
   storyCounts,
   activePositioningId,
 }: {
+  /** The profile being edited; every save is pinned to it (see PUT /api/strategy). */
+  profileId: string;
   initial: Strategy | null;
   language: string;
   timezone: string;
@@ -82,7 +96,7 @@ export function StrategyEditor({
 }) {
   const [strategy, setStrategyState] = useState<Strategy | null>(isStrategyEmpty(initial) ? null : initial);
   const [confirmRemove, setConfirmRemove] = useState<Pillar | null>(null);
-  const save = useAutosave<Strategy>({ url: "/api/strategy", onError: (m) => toast(m, "error") });
+  const save = useAutosave<Strategy>({ url: `/api/strategy?profileId=${encodeURIComponent(profileId)}`, onError: (m) => toast(m, "error") });
   // Latest value outside React's batching so consecutive edits in one tick build on each other.
   const current = useRef<Strategy | null>(strategy);
 
@@ -171,9 +185,9 @@ export function StrategyEditor({
                 aria-label="Positioning statement"
                 className="text-[17px]! leading-relaxed!"
               />
-              <Field label="What LinkedIn should do for you" hint="Rank them: the first goal shapes calls to action and which stories we look for.">
+              <ListField label="What LinkedIn should do for you" hint="Rank them: the first goal shapes calls to action and which stories we look for.">
                 <ListEditor label="Goal" items={s.goals} onChange={(v) => set("goals", v)} placeholder="e.g. Win 2 new clients a month" addLabel="Add goal" suggestions={GOAL_SUGGESTIONS} />
-              </Field>
+              </ListField>
             </div>
           </Block>
 
@@ -188,12 +202,12 @@ export function StrategyEditor({
                 />
               </Field>
               <div className="grid gap-5 md:grid-cols-2">
-                <Field label="What keeps them up at night">
+                <ListField label="What keeps them up at night">
                   <ListEditor label="Pain" items={s.audience.pains} onChange={(v) => set("audience", { ...s.audience, pains: v })} placeholder="A problem, in their words" addLabel="Add pain" />
-                </Field>
-                <Field label="What they want">
+                </ListField>
+                <ListField label="What they want">
                   <ListEditor label="Desire" items={s.audience.desires} onChange={(v) => set("audience", { ...s.audience, desires: v })} placeholder="An outcome they'd pay for" addLabel="Add desire" />
-                </Field>
+                </ListField>
               </div>
             </div>
           </Block>
@@ -241,23 +255,23 @@ export function StrategyEditor({
 
           <Block id="expertise" title="What you know" subtitle="Topics you could talk about for an hour with no notes, and what you sell or want to be known for.">
             <div className="card grid gap-5 p-5 md:grid-cols-2">
-              <Field label="Expertise">
+              <ListField label="Expertise">
                 <ListEditor label="Expertise" items={s.expertise} onChange={(v) => set("expertise", v)} placeholder="e.g. Shipping LLM features in regulated companies" addLabel="Add topic" />
-              </Field>
-              <Field label="Offers">
+              </ListField>
+              <ListField label="Offers">
                 <ListEditor label="Offer" items={s.offers} onChange={(v) => set("offers", v)} placeholder="e.g. 6-week AI readiness sprint" addLabel="Add offer" />
-              </Field>
+              </ListField>
             </div>
           </Block>
 
           <Block id="beliefs" title="What you believe" subtitle="Opinion posts are a belief proven by a story. Contrarian takes are the ones a reasonable peer would argue with.">
             <div className="card grid gap-5 p-5 md:grid-cols-2">
-              <Field label="Beliefs">
+              <ListField label="Beliefs">
                 <ListEditor label="Belief" items={s.beliefs} onChange={(v) => set("beliefs", v)} placeholder="e.g. Most AI pilots fail on data access, not models" addLabel="Add belief" />
-              </Field>
-              <Field label="Contrarian takes">
+              </ListField>
+              <ListField label="Contrarian takes">
                 <ListEditor label="Contrarian take" items={s.contrarianTakes} onChange={(v) => set("contrarianTakes", v)} placeholder="e.g. Prompt engineering is a temporary job" addLabel="Add take" />
-              </Field>
+              </ListField>
             </div>
           </Block>
 
@@ -303,7 +317,7 @@ export function StrategyEditor({
         </div>
 
         <nav aria-label="On this page" className="hidden lg:block">
-          <div className="glass sticky top-10 space-y-0.5 rounded-panel p-2">
+          <div className="glass sticky! top-10 space-y-0.5 rounded-panel p-2">
             <div className="t-eyebrow px-3 pb-1 pt-2">On this page</div>
             {SECTIONS.map((sec) => (
               <a key={sec.id} href={`#${sec.id}`} className="nav-item h-8! text-[13.5px]!">

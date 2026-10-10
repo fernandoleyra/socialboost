@@ -137,6 +137,7 @@ export function MemorySheet({
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [quickUploading, setQuickUploading] = useState(false);
+  const [requestBusy, setRequestBusy] = useState(false);
   const saved = useRef<Draft | null>(null);
   const latest = useRef<Draft | null>(null);
   const currentId = useRef<string | null>(null);
@@ -154,6 +155,7 @@ export function MemorySheet({
     setDraft(null);
     setSelectedPhoto(null);
     setSaveState("idle");
+    setRequestBusy(false);
     try {
       const d = await api<Detail>(`/api/memories/${id}`);
       if (currentId.current !== id) return;
@@ -239,21 +241,25 @@ export function MemorySheet({
         break;
       case "photo":
         fileInput.current?.click();
-        break;
+        return;
     }
-    toast("Added to the story");
+    toast(target === "pillar" ? "Pillar set" : "Added to the story");
   };
 
   /* ---------------- photos ---------------- */
 
+  // Photo changes also update the card in the bank (count + cover), so compute outside the state updater.
+  const detailRef = useRef<Detail | null>(null);
+  detailRef.current = detail;
   const setPhotos = useCallback((update: (ps: PhotoView[]) => PhotoView[]) => {
-    setDetail((d) => {
-      if (!d) return d;
-      const photos = update(d.photos).sort(byOldest);
-      const memory = { ...d.memory, photoCount: photos.length, coverPhotoId: photos[0]?.id ?? null };
-      onChangedRef.current(memory);
-      return { ...d, photos, memory };
-    });
+    const d = detailRef.current;
+    if (!d) return;
+    const photos = update(d.photos).sort(byOldest);
+    const memory = { ...d.memory, photoCount: photos.length, coverPhotoId: photos[0]?.id ?? null };
+    const next = { ...d, photos, memory };
+    detailRef.current = next;
+    setDetail(next);
+    onChangedRef.current(memory);
   }, []);
 
   const addPhoto = useCallback((p: PhotoView) => setPhotos((ps) => [...ps.filter((x) => x.id !== p.id), p]), [setPhotos]);
@@ -327,6 +333,8 @@ export function MemorySheet({
 
   const memory = detail?.memory;
   const photos = detail?.photos ?? [];
+  // The photo request stays up while it is still uploading, even once the first photo has landed.
+  const showRequest = photos.length === 0 || requestBusy;
   const selected = photos.find((p) => p.id === selectedPhoto) ?? null;
   const knownPillar = draft ? findPillar(pillars, draft.pillar) : null;
   const unknownPillar = draft?.pillar && !knownPillar ? draft.pillar : null;
@@ -401,63 +409,65 @@ export function MemorySheet({
         {detail && draft && memory && (
           <div className="space-y-7">
             {/* Photos: every story asks for one */}
-            <div ref={photosRef}>
-              {photos.length === 0 ? (
+            {/* Fixed slots (strip, panel, request) so a dropzone with files still queued is never unmounted mid-upload. */}
+            <div ref={photosRef} className="space-y-3">
+              {photos.length > 0 && (
+                <div className="flex gap-3 overflow-x-auto pb-1">
+                  {photos.map((p, i) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => setSelectedPhoto((s) => (s === p.id ? null : p.id))}
+                      aria-pressed={p.id === selectedPhoto}
+                      aria-label={p.caption || `Photo ${i + 1}`}
+                      className={cx(
+                        "focus-ring relative h-32 w-[6.4rem] shrink-0 overflow-hidden rounded-inner transition-shadow",
+                        p.id === selectedPhoto && "ring-3 ring-accent ring-offset-2 ring-offset-[var(--bg-elevated)]",
+                      )}
+                    >
+                      <PhotoImg id={p.id} className="h-full w-full" />
+                      {i === 0 && <span className="absolute left-1.5 top-1.5 rounded-full bg-black/55 px-2 py-0.5 text-[10px] font-semibold text-white backdrop-blur">Cover</span>}
+                      {p.meta.captionStatus === "pending" && (
+                        <span className="absolute inset-x-0 bottom-0 bg-black/45 py-1 text-center text-[10px] font-medium text-white backdrop-blur">Describing…</span>
+                      )}
+                    </button>
+                  ))}
+                  {quickUploading && (
+                    <span className="grid h-32 w-[6.4rem] shrink-0 place-items-center rounded-inner bg-fill-4" aria-label="Uploading">
+                      <Spinner />
+                    </span>
+                  )}
+                  {!showRequest && <PhotoDropzone memoryId={memory.id} variant="tile" className="h-32 w-[6.4rem]" onUploaded={addPhoto} />}
+                </div>
+              )}
+              {selected && <PhotoPanel photo={selected} onUnlink={() => unlinkPhoto(selected.id)} onRecaption={() => recaption(selected.id)} />}
+              {showRequest && (
                 <div className="space-y-4 rounded-panel p-4 sm:p-5" style={{ background: "color-mix(in srgb, var(--sys-orange) 9%, transparent)" }}>
                   <div className="flex items-start gap-3">
                     <span className="grid size-9 shrink-0 place-items-center rounded-full" style={{ color: "var(--sys-orange)", background: "color-mix(in srgb, var(--sys-orange) 16%, transparent)" }}>
                       <Camera className="size-4.5" />
                     </span>
                     <div>
-                      <div className="t-headline">This story needs a photo</div>
+                      <div className="t-headline">{photos.length === 0 ? "This story needs a photo" : "Adding your photos"}</div>
                       <p className="t-footnote text-label-2">
-                        Every post goes out with a real photo. One from the moment is best. No photo from back then? Take one this week of the place, an object, or the people involved.
+                        {photos.length === 0
+                          ? "Every post goes out with a real photo. One from the moment is best. No photo from back then? Take one this week of the place, an object, or the people involved."
+                          : "The rest of your photos are uploading. Keep this open until they're done."}
                       </p>
                     </div>
                   </div>
-                  {quickUploading ? (
-                    <div className="flex items-center gap-2 t-subhead text-label-2">
+                  {quickUploading && photos.length === 0 && (
+                    <div className="flex items-center gap-2 t-subhead text-label-2" aria-live="polite">
                       <Spinner className="size-4" /> Uploading…
                     </div>
-                  ) : (
-                    <PhotoDropzone memoryId={memory.id} variant="panel" onUploaded={addPhoto} title="Drop a photo from this story" />
                   )}
-                  <details className="group">
-                    <summary className="cursor-pointer t-footnote font-semibold text-accent">What makes a good photo</summary>
-                    <PhotoTips className="pt-3" />
-                  </details>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  <div className="flex gap-3 overflow-x-auto pb-1">
-                    {photos.map((p, i) => (
-                      <button
-                        key={p.id}
-                        type="button"
-                        onClick={() => setSelectedPhoto((s) => (s === p.id ? null : p.id))}
-                        aria-pressed={p.id === selectedPhoto}
-                        aria-label={p.caption || `Photo ${i + 1}`}
-                        className={cx(
-                          "focus-ring relative h-32 w-[6.4rem] shrink-0 overflow-hidden rounded-inner transition-shadow",
-                          p.id === selectedPhoto && "ring-3 ring-accent ring-offset-2 ring-offset-[var(--bg-elevated)]",
-                        )}
-                      >
-                        <PhotoImg id={p.id} className="h-full w-full" />
-                        {i === 0 && <span className="absolute left-1.5 top-1.5 rounded-full bg-black/55 px-2 py-0.5 text-[10px] font-semibold text-white backdrop-blur">Cover</span>}
-                        {p.meta.captionStatus === "pending" && (
-                          <span className="absolute inset-x-0 bottom-0 bg-black/45 py-1 text-center text-[10px] font-medium text-white backdrop-blur">Describing…</span>
-                        )}
-                      </button>
-                    ))}
-                    {quickUploading ? (
-                      <span className="grid h-32 w-[6.4rem] shrink-0 place-items-center rounded-inner bg-fill-4">
-                        <Spinner />
-                      </span>
-                    ) : (
-                      <PhotoDropzone memoryId={memory.id} variant="tile" className="h-32 w-[6.4rem]" onUploaded={addPhoto} />
-                    )}
-                  </div>
-                  {selected && <PhotoPanel photo={selected} onUnlink={() => unlinkPhoto(selected.id)} onRecaption={() => recaption(selected.id)} />}
+                  <PhotoDropzone memoryId={memory.id} variant="panel" onUploaded={addPhoto} onBusyChange={setRequestBusy} title="Drop a photo from this story" />
+                  {photos.length === 0 && (
+                    <details className="group">
+                      <summary className="cursor-pointer t-footnote font-semibold text-accent">What makes a good photo</summary>
+                      <PhotoTips className="pt-3" />
+                    </details>
+                  )}
                 </div>
               )}
             </div>

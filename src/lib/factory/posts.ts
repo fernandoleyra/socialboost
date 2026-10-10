@@ -4,10 +4,12 @@ import { HttpError } from "@/lib/http";
 import { createPost, getMemory, getPhoto, getPost, getStrategy, listPhotos, listPosts, updatePost } from "@/lib/repo";
 import type { Memory, Photo, Post, PostStatus } from "@/lib/types";
 import { hookOf, parseAngleField } from "./angles";
-import { findPillar, lintForPost } from "./context";
+import { lintForPost } from "./context";
+import { findPillar } from "./pillars";
 import { relint } from "./quality";
 import { statusAfterHumanEdit } from "./status";
 import { getStructure, recommendStructures } from "./structures";
+import type { PhotoLite, PostDetail } from "./types";
 import { saveHumanVersion } from "./versions";
 
 /** The post, if it belongs to the active profile. 404 otherwise (never leak other profiles). */
@@ -67,16 +69,7 @@ export function applyHumanEdit(post: Post, body: string, note?: string): Post {
   return updatePost(post.id, { body, quality, status: statusAfterHumanEdit(post.status, body) });
 }
 
-export type PhotoLite = Pick<Photo, "id" | "memoryId" | "width" | "height" | "caption" | "userNote" | "isCandid" | "createdAt">;
 const lite = (p: Photo): PhotoLite => ({ id: p.id, memoryId: p.memoryId, width: p.width, height: p.height, caption: p.caption, userNote: p.userNote, isCandid: p.isCandid, createdAt: p.createdAt });
-
-export type PostDetail = {
-  post: Post;
-  memory: Memory | null;
-  photo: PhotoLite | null;
-  memoryPhotos: PhotoLite[];
-  libraryPhotos: PhotoLite[];
-};
 
 /** Post plus everything the editor shows around it. */
 export function postDetail(post: Post): PostDetail {

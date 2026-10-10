@@ -116,13 +116,25 @@ You: "Your biggest client, gone. Where were you when you found out?"`.trim();
 }
 
 const quote = (s: string) => `"${s.replace(/"/g, "'")}"`;
+const quoteLine = (s: string) => quote(truncate(s, 300));
 
-/** The engine's decision as a final instruction for the model. */
-export function directorNote(ctx: InterviewContext, d: Decision): string {
+/** How the turn is produced: the model writes only a reaction (+ question), or everything. */
+export type NoteMode = "protocol" | "free";
+
+/**
+ * The engine's decision as the model's final instruction. In "protocol" mode the model
+ * writes only a short reaction and/or one question; fixed lines (photo request, finish
+ * hints) are added by the app. "free" mode (languages without fixed lines) asks the model
+ * for the whole message.
+ */
+export function directorNote(ctx: InterviewContext, d: Decision, mode: NoteMode = "protocol"): string {
   const first = firstName(ctx.name);
   const hello = d.firstMessage ? `This is your first message: greet ${first} in a few words first. ` : "";
   const covered = d.covered.length ? `\nAlready covered: ${d.covered.join(", ")}. Don't ask about those again.` : "";
   const like = d.probe ? `\nAsk something like: ${quote(d.probe.text)}` : "";
+  const react = `Write ONE short sentence reacting to what ${first} just said, reusing their own words. No question. No praise. Nothing else.`;
+  const finishStory = `"${FINISH_STORY}"`;
+  const finishPos = `"${FINISH_POSITIONING}"`;
   switch (d.stage) {
     case "opening":
       if (ctx.kind === "positioning") {
@@ -130,35 +142,176 @@ export function directorNote(ctx: InterviewContext, d: Decision): string {
       }
       return `${hello}Say we'll capture one real moment from their work, about 10 minutes, and they can type or talk. Then ask this question in your own words: ${quote(ctx.seed ?? "What happened at work this week that you keep thinking about?")}`;
     case "probe": {
-      if (d.target === "privacy") return `${hello}Next, check privacy. Ask if any of this is confidential or if anyone should stay anonymous.${like}`;
+      if (d.target === "privacy") return `${hello}Next, check privacy: ask if any of this is confidential or if anyone should stay anonymous.${like}`;
       const el = STORY_ELEMENTS.find((e) => e.key === d.target);
-      if (d.generic) {
-        return `${hello}Their last answer was general. Ask for the last specific time it actually happened.${like}${covered}`;
-      }
+      if (d.generic) return `${hello}Their last answer was general. Ask for the last specific time it actually happened.${like}${covered}`;
       const after = d.missing.filter((m) => m !== el?.label.toLowerCase()).slice(0, 2);
-      return `${hello}Next, find out ${el?.goal ?? "more about the moment"}.${like}${covered}${after.length ? `\nIf they already told you that, ask about ${after[0]} instead.` : ""}`;
+      return `${hello}Write a few words reacting to their answer, then ONE question to find out ${el?.goal ?? "more about the moment"}.${like}${covered}${
+        after.length ? `\nIf they already told you that, ask about ${after[0]} instead.` : ""
+      }`;
     }
     case "photo":
-      return `${hello}The story has enough detail now. Ask for ONE real photo connected to it: the place, the people, an object, or a screenshot. Say a quick phone photo is perfect. Ask nothing else.${like}`;
+      return mode === "protocol"
+        ? `Their story has enough detail now. ${react}`
+        : `${hello}The story has enough detail now. Ask for ONE real photo connected to it: the place, the people, an object, or a screenshot. Say a quick phone photo is perfect. Ask nothing else.${like}`;
     case "photo-caption":
-      return `They shared a photo for this story. Thank them in a few words. Then ask what one line they'd tell a friend about this photo.${like}`;
+      return mode === "protocol"
+        ? `${first} just shared a photo for this story. Write ONE short sentence thanking them for it. No question. Nothing else.`
+        : `They shared a photo for this story. Thank them in a few words. Then ask what one line they'd tell a friend about this photo.${like}`;
     case "wrap":
-      return `This story is complete. In 2 or 3 short sentences: thank ${first} for the story${
-        d.photoDeferred ? ", say it's fine to add the photo later and you'll remind them" : ""
-      }, and say they can tap "${FINISH_STORY}" to save it, or tell you about another moment. Don't ask anything else.`;
+      return mode === "protocol"
+        ? `The story is complete. Write ONE or two short sentences that reflect back the heart of it (the moment and what changed), using ${first}'s words. No question, no advice, no praise.`
+        : `This story is complete. In 2 or 3 short sentences: thank ${first} for the story${
+            d.photoDeferred ? ", say it's fine to add the photo later and you'll remind them" : ""
+          }, and say they can tap ${finishStory} to save it, or tell you about another moment. Don't ask anything else.`;
     case "closing":
-      return `${first} is done. In one short sentence, tell them to tap "${ctx.kind === "positioning" ? FINISH_POSITIONING : FINISH_STORY}" and you'll write it all up. No question.`;
+      return `${first} is done. In one short sentence, tell them to tap ${ctx.kind === "positioning" ? finishPos : finishStory} and you'll write it all up. No question.`;
     case "pos-question": {
       const area = POSITIONING_AREAS.find((a) => a.key === d.target);
-      return `${hello}Next, find out ${area?.goal ?? "more"}.${like}${covered}`;
+      return `${hello}Write a few words reacting to their answer, then ONE question to find out ${area?.goal ?? "more"}.${like}${covered}`;
     }
     case "pos-example":
       return `Their answer was short. Ask for one concrete example or a number.${like}`;
     case "pos-wrap":
-      return `You now have what you need. In 2 short sentences: thank ${first}, and say they can tap "${FINISH_POSITIONING}", or add anything else first. Don't ask another question.`;
+      return mode === "protocol" ? react : `You now have what you need. In 2 short sentences: thank ${first}, and say they can tap ${finishPos}, or add anything else first. Don't ask another question.`;
     case "pos-followup":
-      return `Acknowledge what they added in a few words. Then ask if there's anything else, or tell them to tap "${FINISH_POSITIONING}".`;
+      return mode === "protocol" ? react : `Acknowledge what they added in a few words. Then ask if there's anything else, or tell them to tap ${finishPos}.`;
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* Fixed protocol lines                                                */
+/* ------------------------------------------------------------------ */
+
+export type ProtocolLines = {
+  photoAsk: string;
+  captionAsk: string;
+  wrap: string;
+  wrapDeferred: string;
+  closingStory: string;
+  closingPositioning: string;
+  posWrap: string;
+  posFollowup: string;
+};
+
+const PROTOCOL: Record<string, ProtocolLines> = {
+  en: {
+    photoAsk: "Do you have a photo from that moment, or something close to it? The place, the people, an object or a screenshot all work, and a quick phone photo is perfect.",
+    captionAsk: "What's the one line you'd tell a friend about this photo?",
+    wrap: `Tap "${FINISH_STORY}" to keep this story, or tell me about another moment.`,
+    wrapDeferred: `No photo yet is fine: the story will be flagged so you can add one later. Tap "${FINISH_STORY}" to keep it, or tell me about another moment.`,
+    closingStory: `Tap "${FINISH_STORY}" and I'll write it up for your Memory Bank.`,
+    closingPositioning: `Tap "${FINISH_POSITIONING}" and I'll draft your positioning and pillars.`,
+    posWrap: `That's everything I need. Tap "${FINISH_POSITIONING}", or add anything else first.`,
+    posFollowup: `Anything else? If not, tap "${FINISH_POSITIONING}".`,
+  },
+  es: {
+    photoAsk: "¿Tienes una foto de ese momento, o algo parecido? El lugar, las personas, un objeto o una captura de pantalla sirven, y una foto rápida con el móvil es perfecta.",
+    captionAsk: "¿Qué frase le dirías a un amigo sobre esta foto?",
+    wrap: `Toca "${FINISH_STORY}" para guardar esta historia, o cuéntame otro momento.`,
+    wrapDeferred: `Sin foto por ahora está bien: marcaré la historia para que añadas una después. Toca "${FINISH_STORY}" para guardarla, o cuéntame otro momento.`,
+    closingStory: `Toca "${FINISH_STORY}" y la redacto para tu Memory Bank.`,
+    closingPositioning: `Toca "${FINISH_POSITIONING}" y redacto tu posicionamiento y tus pilares.`,
+    posWrap: `Ya tengo lo que necesito. Toca "${FINISH_POSITIONING}", o añade algo más antes.`,
+    posFollowup: `¿Algo más? Si no, toca "${FINISH_POSITIONING}".`,
+  },
+  de: {
+    photoAsk: "Hast du ein Foto von diesem Moment oder etwas Ähnliches? Der Ort, die Leute, ein Gegenstand oder ein Screenshot passen, und ein schnelles Handyfoto ist perfekt.",
+    captionAsk: "Welchen einen Satz würdest du einem Freund zu diesem Foto sagen?",
+    wrap: `Tippe auf "${FINISH_STORY}", um diese Geschichte zu speichern, oder erzähl mir von einem anderen Moment.`,
+    wrapDeferred: `Noch kein Foto ist okay: Ich markiere die Geschichte, damit du später eins hinzufügen kannst. Tippe auf "${FINISH_STORY}", um sie zu speichern, oder erzähl mir von einem anderen Moment.`,
+    closingStory: `Tippe auf "${FINISH_STORY}", und ich schreibe sie für deine Memory Bank auf.`,
+    closingPositioning: `Tippe auf "${FINISH_POSITIONING}", und ich entwerfe deine Positionierung und Themensäulen.`,
+    posWrap: `Ich habe alles, was ich brauche. Tippe auf "${FINISH_POSITIONING}" oder ergänze vorher noch etwas.`,
+    posFollowup: `Noch etwas? Wenn nicht, tippe auf "${FINISH_POSITIONING}".`,
+  },
+  fr: {
+    photoAsk: "As-tu une photo de ce moment, ou quelque chose d'approchant ? Le lieu, les personnes, un objet ou une capture d'écran conviennent, et une photo rapide au téléphone est parfaite.",
+    captionAsk: "Quelle phrase dirais-tu à un ami à propos de cette photo ?",
+    wrap: `Appuie sur « ${FINISH_STORY} » pour garder cette histoire, ou raconte-moi un autre moment.`,
+    wrapDeferred: `Pas de photo pour l'instant, ce n'est pas grave : je signale l'histoire pour que tu en ajoutes une plus tard. Appuie sur « ${FINISH_STORY} » pour la garder, ou raconte-moi un autre moment.`,
+    closingStory: `Appuie sur « ${FINISH_STORY} » et je la rédige pour ta Memory Bank.`,
+    closingPositioning: `Appuie sur « ${FINISH_POSITIONING} » et je rédige ton positionnement et tes piliers.`,
+    posWrap: `J'ai tout ce qu'il me faut. Appuie sur « ${FINISH_POSITIONING} », ou ajoute quelque chose avant.`,
+    posFollowup: `Autre chose ? Sinon, appuie sur « ${FINISH_POSITIONING} ».`,
+  },
+  pt: {
+    photoAsk: "Você tem uma foto desse momento, ou algo parecido? O lugar, as pessoas, um objeto ou uma captura de tela servem, e uma foto rápida no celular é perfeita.",
+    captionAsk: "Qual frase você diria a um amigo sobre esta foto?",
+    wrap: `Toque em "${FINISH_STORY}" para guardar esta história, ou me conte outro momento.`,
+    wrapDeferred: `Sem foto por enquanto, tudo bem: vou marcar a história para você adicionar uma depois. Toque em "${FINISH_STORY}" para guardá-la, ou me conte outro momento.`,
+    closingStory: `Toque em "${FINISH_STORY}" e eu escrevo tudo para a sua Memory Bank.`,
+    closingPositioning: `Toque em "${FINISH_POSITIONING}" e eu rascunho seu posicionamento e seus pilares.`,
+    posWrap: `Já tenho o que preciso. Toque em "${FINISH_POSITIONING}", ou acrescente algo antes.`,
+    posFollowup: `Mais alguma coisa? Se não, toque em "${FINISH_POSITIONING}".`,
+  },
+  it: {
+    photoAsk: "Hai una foto di quel momento, o qualcosa di simile? Il posto, le persone, un oggetto o uno screenshot vanno benissimo, e una foto veloce col telefono è perfetta.",
+    captionAsk: "Qual è la frase che diresti a un amico su questa foto?",
+    wrap: `Tocca "${FINISH_STORY}" per salvare questa storia, oppure raccontami un altro momento.`,
+    wrapDeferred: `Niente foto per ora va bene: segnalo la storia così potrai aggiungerne una più tardi. Tocca "${FINISH_STORY}" per salvarla, oppure raccontami un altro momento.`,
+    closingStory: `Tocca "${FINISH_STORY}" e la scrivo per la tua Memory Bank.`,
+    closingPositioning: `Tocca "${FINISH_POSITIONING}" e preparo il tuo posizionamento e i tuoi pilastri.`,
+    posWrap: `Ho tutto quello che mi serve. Tocca "${FINISH_POSITIONING}", oppure aggiungi altro prima.`,
+    posFollowup: `Altro? Se no, tocca "${FINISH_POSITIONING}".`,
+  },
+};
+
+const langCode = (language: string | null | undefined) => (language || "en").toLowerCase().split(/[-_]/)[0];
+
+/** Fixed lines in the profile's language, or null when we don't have that language. */
+export function protocolLines(language: string | null | undefined): ProtocolLines | null {
+  return PROTOCOL[langCode(language)] ?? null;
+}
+
+export const isEnglish = (language: string | null | undefined) => langCode(language) === "en";
+
+/**
+ * Deterministic English opening: a short frame plus the seed question verbatim. Instant on
+ * any model, and the bank question survives intact. Other languages let the model translate.
+ */
+export function openingMessage(ctx: InterviewContext, opts: { returning: boolean; variant: number }): string | null {
+  if (!isEnglish(ctx.language)) return null;
+  const first = firstName(ctx.name);
+  if (ctx.kind === "positioning") {
+    return `Hi ${first}. Over the next 10 to 15 minutes we'll work out what your LinkedIn is for and who it should reach. One question at a time. Short answers are fine; examples help most.\n\n${POSITIONING_AREAS[0].question.text}`;
+  }
+  const frames = opts.returning
+    ? [`Hi ${first}, new story. Same as before: one moment, the details, then a photo.`, `Good to see you, ${first}. Let's find the next story.`, `Hi ${first}. One real moment, told in detail. Take your time.`]
+    : [`Hi ${first}. Let's capture one real moment from your work, in enough detail that it could become a post. About 10 minutes, one question at a time. Short answers are fine, and you can type or tap the mic.`];
+  return `${frames[Math.abs(opts.variant) % frames.length]}\n\n${ctx.seed ?? "What happened at work this week that you keep thinking about?"}`;
+}
+
+/* ------------------------------------------------------------------ */
+/* Is the model's question on target? (English)                        */
+/* ------------------------------------------------------------------ */
+
+const TARGET_WORDS: Record<string, RegExp> = {
+  scene: /\b(when|where|what (day|time|month|year)|which (day|city|room|office)|time of day|place|room|setting|camera|look like|were you)\b/i,
+  people: /\b(who|someone|anyone|say|said|tell|told|repl(y|ied)|respond|react|answer|words)\b/i,
+  stakes: /\b(want|wanted|hop(e|ed|ing)|need|needed|goal|risk|lose|lost|stake|on the line|wrong|plan|afraid|fear|worr\w*|cost|happen(ed)? if|what if|pressure|matter)\b/i,
+  turning: /\b(moment|click(ed)?|chang\w*|reali[sz]\w*|turn\w*|shift\w*|before|opposite|exactly when|decid\w*|notic\w*)\b/i,
+  details: /\b(how (much|many|long|big)|numbers?|figures?|cost|see|saw|hear|heard|smell\w*|look like|screen|details?|exactly|objects?|room)\b/i,
+  feelings: /\b(feel|felt|feeling|head|think|thought|mind|react\w*|emotion\w*|nervous|scared|stomach|heart)\b/i,
+  lesson: /\b(learn\w*|lesson|teach|tell|advice|takeaway|differently|now|matter\w*|someone|others|new hire|monday|rule)\b/i,
+  privacy: /\b(confidential|anonym\w*|private|names?|permission|share|mention|public)\b/i,
+  specific: /\b(last time|specific|one time|example|instance|particular|recent\w*|that day|happened)\b/i,
+  goals: /\b(linkedin|goals?|want|hope|achieve|clients?|hir\w*|investors?|speak\w*|job|matters?|success|outcome)\b/i,
+  audience: /\b(who|readers?|person|people|audience|role|ideal|clients?|customers?|picture|reach)\b/i,
+  problems: /\b(asks?|questions?|struggl\w*|problems?|pain|challeng\w*|stuck|hard|frustrat\w*|worr\w*)\b/i,
+  offer: /\b(sell|offer\w*|known for|services?|results?|help|proof|products?|publicly|outcomes?)\b/i,
+  expertise: /\b(topics?|talk about|expert\w*|know|hour|subjects?|deep)\b/i,
+  beliefs: /\b(believe|beliefs?|disagree|wrong|overrated|myths?|opinions?|unpopular|dispute|contrar\w*|peers)\b/i,
+  origin: /\b(how did you|end(ed)? up|start\w*|began|got into|get into|background|decid\w*|origin|path|journey)\b/i,
+  boundaries: /\b(off-limits|off limits|avoid|private|personal|never|won'?t|don'?t want|tone|boundar\w*|comfortable|emojis?)\b/i,
+  rhythm: /\b(how (many|often)|week\w*|time|posts?|review|realistic\w*|cadence|frequen\w*)\b/i,
+  example: /\b(example|instance|specific|for instance|time when|numbers?|case)\b/i,
+};
+
+/** Does `question` plausibly ask about `target`? Unknown targets always pass. */
+export function questionOnTarget(target: string | undefined, question: string): boolean {
+  const re = target ? TARGET_WORDS[target] : undefined;
+  return re ? re.test(question) : true;
 }
 
 const OPENING_TURN = "Hi, I'm ready.";
@@ -172,7 +325,7 @@ function renderUserMessage(m: TranscriptMessage): string {
  * Chat messages for the interviewer: a synthetic "ready" turn (so the conversation always
  * starts with the user), the current thread (last 16 messages), then the director's note.
  */
-export function interviewerMessages(ctx: InterviewContext, thread: TranscriptMessage[], decision: Decision) {
+export function interviewerMessages(ctx: InterviewContext, thread: TranscriptMessage[], decision: Decision, mode: NoteMode = "protocol") {
   const recent = thread.slice(-16);
   const msgs: { role: "user" | "assistant" | "system"; content: string }[] = [];
   if (recent[0]?.role !== "user") msgs.push({ role: "user", content: OPENING_TURN });
@@ -184,27 +337,8 @@ export function interviewerMessages(ctx: InterviewContext, thread: TranscriptMes
     else msgs.push({ role: m.role, content });
   }
   if (msgs[msgs.length - 1]?.role !== "user") msgs.push({ role: "user", content: "(continue)" });
-  msgs.push({ role: "system", content: `Director's note for your next message:\n${directorNote(ctx, decision)}` });
+  msgs.push({ role: "system", content: `Director's note for your next message:\n${directorNote(ctx, decision, mode)}` });
   return msgs;
-}
-
-/** Appended when a photo request didn't mention a photo (the inline card also asks). */
-export function photoAskFallback(language: string): string {
-  const c = (language || "en").toLowerCase().split(/[-_]/)[0];
-  const t: Record<string, string> = {
-    en: "Do you have a photo from that moment, or something close to it? The place, the people, an object or a screenshot all work.",
-    es: "¿Tienes una foto de ese momento, o algo parecido? El lugar, las personas, un objeto o una captura de pantalla sirven.",
-    de: "Hast du ein Foto von diesem Moment oder etwas Ähnliches? Der Ort, die Leute, ein Gegenstand oder ein Screenshot passen alle.",
-    fr: "As-tu une photo de ce moment, ou quelque chose d'approchant ? Le lieu, les personnes, un objet ou une capture d'écran conviennent.",
-    pt: "Tens uma foto desse momento, ou algo parecido? O lugar, as pessoas, um objeto ou uma captura de ecrã servem.",
-    it: "Hai una foto di quel momento, o qualcosa di simile? Il posto, le persone, un oggetto o uno screenshot vanno benissimo.",
-  };
-  return t[c] ?? t.en;
-}
-
-const PHOTO_WORDS = /photo|picture|pic\b|image|screenshot|snapshot|selfie|foto|bild|imagen|immagine|captura|aufnahme|cliché/i;
-export function mentionsPhoto(text: string): boolean {
-  return PHOTO_WORDS.test(text);
 }
 
 /* ------------------------------------------------------------------ */
@@ -228,21 +362,22 @@ export function formatTranscript(messages: TranscriptMessage[], name: string, ma
 /* Story card extraction (finish)                                      */
 /* ------------------------------------------------------------------ */
 
-export function storyCardPrompt(input: { name: string; headline: string; language: string; pillars: { name: string; description: string }[]; transcript: string }) {
+export function storyCardPrompt(input: { name: string; headline: string; language: string; pillars: { name: string; description: string }[]; transcript: string; privacy?: string | null }) {
   const first = firstName(input.name);
   const pillarList = input.pillars.length
     ? `Content pillars:\n${input.pillars.map((p, i) => `${i + 1}. ${p.name}${p.description ? `: ${truncate(p.description, 140)}` : ""}`).join("\n")}\n\n`
     : "";
   const system = `You turn interview transcripts into story cards for a LinkedIn ghostwriter. You are precise and you never invent anything.`;
+  const privacy = input.privacy ? `\nPrivacy note from ${first}: ${quoteLine(input.privacy)}. Respect it (if they want someone anonymous, use a role instead of the name).\n` : "";
   const user = `${pillarList}TRANSCRIPT (interview with ${first}${input.headline ? `, ${truncate(input.headline, 120)}` : ""}):
 ${input.transcript}
-
+${privacy}
 Write ONE story card from what ${first} said.
 Rules:
 1. Use ONLY facts ${first} said. If something wasn't said, leave the field empty ("" or []). Never guess.
-2. title: 3 to 8 words, specific (who, what, where). No clickbait.
+2. title: 3 to 8 words naming what happened, like a file label (e.g. "Payroll export failed before Christmas"). Not a headline. Don't use ${first}'s name.
 3. summary: 1 or 2 plain sentences.
-4. story: retell it in first person as ${first}, in time order, 100 to 300 words. Keep their own words and phrases. Don't add a moral they didn't say.
+4. story: retell it in first person as ${first}, in time order, 100 to 300 words. Keep their own words and phrases. Leave out the interviewer's questions. Don't add a moral they didn't say.
 5. when and place: exactly as they said them.
 6. people: names or roles of the people in it. If they asked to keep someone anonymous, use a role instead of the name.
 7. emotions: feelings they mentioned, one or two words each.

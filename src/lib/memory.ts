@@ -47,9 +47,28 @@ function setEmbedding(id: string, embedding: number[] | null) {
   getDb().prepare(`UPDATE memories SET embedding = ? WHERE id = ?`).run(embedding ? JSON.stringify(embedding) : null, id);
 }
 
+/**
+ * embed() with a deadline. An unreachable embedding server must not hang a search or an
+ * autosave: on timeout we carry on without vectors (keyword search; re-indexed on a later search).
+ */
+async function embedWithin(texts: string[], ms: number): Promise<number[][] | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), ms);
+  });
+  try {
+    return await Promise.race([embed(texts).catch(() => null), deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const QUERY_EMBED_MS = 10_000;
+const BATCH_EMBED_MS = 30_000;
+
 /** Embed one memory's text; null when no embedding model is available. */
 export async function embedMemory(m: Pick<Memory, "title" | "summary" | "story" | "lesson" | "tags">): Promise<number[] | null> {
-  const vecs = await embed([memoryEmbeddingText(m)]);
+  const vecs = await embedWithin([memoryEmbeddingText(m)], QUERY_EMBED_MS);
   return vecs?.[0] ?? null;
 }
 
@@ -59,12 +78,15 @@ export async function embedMemory(m: Pick<Memory, "title" | "summary" | "story" 
  * the index heals itself after Ollama was down or the model changed.
  */
 async function semanticScores(profileId: string, query: string, memories: Memory[]): Promise<Map<string, number> | null> {
-  const q = (await embed([query]))?.[0];
+  const q = (await embedWithin([query], QUERY_EMBED_MS))?.[0];
   if (!q || q.length === 0) return null;
   const stored = storedEmbeddings(profileId);
   const stale = memories.filter((m) => stored.get(m.id)?.length !== q.length).slice(0, 64);
   if (stale.length) {
-    const vecs = await embed(stale.map((m) => memoryEmbeddingText(m)));
+    const vecs = await embedWithin(
+      stale.map((m) => memoryEmbeddingText(m)),
+      BATCH_EMBED_MS,
+    );
     if (vecs && vecs.length === stale.length) {
       stale.forEach((m, i) => {
         setEmbedding(m.id, vecs[i]);
@@ -263,7 +285,8 @@ export async function createManualMemory(profileId: string, input: ManualMemoryI
 
   const pick = (own: string | undefined, ai: string | undefined) => (own && own.trim() ? own.trim() : (ai ?? "").trim());
   const merge = (own: string[] | undefined, ai: string[] | undefined, max = 30) => cleanList([...(own ?? []), ...(ai ?? [])], max);
-  const pillarId = input.pillar ?? (card?.pillar ? (pillars.find((p) => pillarMatches(card.pillar, p))?.id ?? null) : null);
+  const own = input.pillar?.trim();
+  const pillarId = own ? (pillars.find((p) => pillarMatches(own, p))?.id ?? own) : card?.pillar ? (pillars.find((p) => pillarMatches(card.pillar, p))?.id ?? null) : null;
 
   const draft = {
     title: pick(input.title, card?.title) || deriveTitle(story),
@@ -301,6 +324,7 @@ export async function patchMemory(current: Memory, patch: Partial<MemoryFields>)
     if (clean[key]) clean[key] = cleanList(clean[key], key === "details" || key === "quotes" ? 60 : 40);
   }
   if (clean.title !== undefined && !clean.title.trim()) throw new HttpError(400, "A story needs a title.");
+  if (clean.pillar !== undefined) clean.pillar = clean.pillar?.trim() || null;
   const next = { ...current, ...clean };
   const textChanged = TEXT_FIELDS.some((k) => JSON.stringify(next[k]) !== JSON.stringify(current[k]));
   const embedding = textChanged ? await embedMemory(next) : undefined;

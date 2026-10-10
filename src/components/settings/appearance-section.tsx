@@ -41,6 +41,7 @@ export function AppearanceSection() {
       /* storage blocked */
     }
     apply(t);
+    window.dispatchEvent(new Event("sb-theme-change"));
   };
 
   return (

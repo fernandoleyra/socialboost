@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { readBody } from "@/lib/factory/request";
 import { handle, ok, HttpError } from "@/lib/http";
 import { listPostVersions, requireProfile } from "@/lib/repo";
 import { applyHumanEdit, requirePost } from "@/lib/factory/posts";
@@ -22,7 +23,7 @@ export const POST = handle(async (req: Request, ctx: Ctx) => {
   const { id } = await ctx.params;
   const post = requirePost(profile.id, id);
   if (post.status === "published") throw new HttpError(409, "This post is already published.");
-  const { versionId } = z.object({ versionId: z.string().min(1) }).parse(await req.json());
+  const { versionId } = await readBody(req, z.object({ versionId: z.string().min(1) }));
   const version = getVersion(post.id, versionId);
   if (!version) throw new HttpError(404, "Version not found");
   const when = new Date(version.createdAt).toLocaleString("en", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });

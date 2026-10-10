@@ -8,6 +8,7 @@ import {
   normalizeOllamaModel,
   presetModels,
   pullAllCommand,
+  routesMissingModel,
   tasksUsingProvider,
   uniqueProviderId,
   validateProvider,
@@ -149,5 +150,14 @@ describe("health report", () => {
     const s = settings({ routes: { ...settings().routes, writer: null } });
     const r = buildHealthReport(s, [up(["qwen3:14b", "qwen2.5vl:7b", "nomic-embed-text"])]);
     expect(r.summary).toMatchObject({ ready: false, missingRequired: 1, missingRecommended: 0 });
+  });
+});
+
+describe("unsaveable routes", () => {
+  it("lists tasks that point at a provider without a model name", () => {
+    expect(routesMissingModel(settings())).toEqual([]);
+    const s = settings();
+    const blank = { ...s, routes: { ...s.routes, writer: { providerId: "ollama", model: "  " }, vision: null } };
+    expect(routesMissingModel(blank)).toEqual(["writer"]);
   });
 });

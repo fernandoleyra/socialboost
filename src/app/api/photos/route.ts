@@ -2,6 +2,7 @@ import { after } from "next/server";
 import { handle, ok, HttpError } from "@/lib/http";
 import { requireProfile } from "@/lib/repo";
 import { listPhotoViews, photoView, processUpload, queueCaption } from "@/lib/photos";
+import { MAX_UPLOAD_BYTES } from "@/lib/photo-core";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +21,11 @@ export const GET = handle(async (req: Request) => {
  */
 export const POST = handle(async (req: Request) => {
   const profile = requireProfile();
+  // Refuse obviously oversized bodies before buffering them (multipart adds a little overhead).
+  const declared = Number(req.headers.get("content-length") ?? 0);
+  if (declared > MAX_UPLOAD_BYTES + 1024 * 1024) {
+    throw new HttpError(413, "That photo is over the 25 MB limit.", "Export a smaller copy, or share it from your phone at a lower size.");
+  }
   let form: FormData;
   try {
     form = await req.formData();
@@ -32,5 +38,5 @@ export const POST = handle(async (req: Request) => {
   const note = String(form.get("note") ?? "");
   const photo = await processUpload(profile.id, file, { memoryId, note });
   after(() => queueCaption(photo.id));
-  return ok({ photo: photoView(photo) }, { status: 201 });
+  return ok({ photo: photoView(photo, { resume: false }) }, { status: 201 });
 });

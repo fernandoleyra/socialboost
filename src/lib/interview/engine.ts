@@ -297,6 +297,33 @@ function decidePositioning(
   return { ...base, stage: "pos-question", target: nextArea.key, probe: nextArea.question };
 }
 
+/**
+ * The part of a story thread the extractor should read: the story itself, without the
+ * photo request, the caption exchange, the privacy check or the wrap. The privacy answer
+ * comes back separately so the extractor can respect it.
+ */
+export function storyExtractionTranscript(thread: TranscriptMessage[], meta: Record<string, MessageMeta>): { messages: TranscriptMessage[]; privacy: string | null } {
+  const skip = new Set<Stage>(["photo", "photo-caption", "wrap", "closing"]);
+  const out: TranscriptMessage[] = [];
+  let privacy: string | null = null;
+  let prev: MessageMeta | undefined;
+  for (const m of thread) {
+    if (m.role === "assistant") {
+      prev = meta[m.id];
+      if (prev?.target === "privacy" || (prev && skip.has(prev.stage))) continue;
+      out.push(m);
+      continue;
+    }
+    if (prev?.target === "privacy") {
+      if (m.content.trim()) privacy = m.content.trim();
+      continue;
+    }
+    if (prev && skip.has(prev.stage)) continue;
+    out.push(m);
+  }
+  return { messages: out, privacy };
+}
+
 /** Stages whose reply must be exactly one question (the stream filter cuts after it). */
 export function isSingleQuestionStage(stage: Stage): boolean {
   return stage === "probe" || stage === "photo" || stage === "photo-caption" || stage === "pos-question" || stage === "pos-example";

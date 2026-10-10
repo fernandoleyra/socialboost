@@ -94,7 +94,7 @@ export function WeekStrip({ week, pillars }: { week: WeekDay[]; pillars: Record<
                 Open slot
               </Link>
             )}
-            {!d.open && d.posts.length === 0 && <div className="flex flex-1 items-center justify-center t-caption text-label-3">No post</div>}
+            {!d.open && d.posts.length === 0 && <div className="flex flex-1 items-center justify-center t-caption text-label-3">Rest day</div>}
           </div>
         ))}
       </div>

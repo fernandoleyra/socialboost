@@ -6,11 +6,12 @@ import Link from "next/link";
 import { Mic, NotebookPen } from "lucide-react";
 import { Button, Textarea, api, toast } from "@/components/ui";
 
-type Created = { interview?: { id: string }; id?: string };
+type Created = { interview: { id: string } };
 
 /**
  * "Homework for Life" (Matthew Dicks): one line about what made today different.
- * Starts a short story interview seeded with it, so small moments don't get lost.
+ * Starts a story interview with that line as the person's first answer (`knownStory`), so the
+ * interviewer digs into it instead of asking an unrelated opener. Small moments don't get lost.
  */
 export function QuickCapture() {
   const router = useRouter();
@@ -18,14 +19,12 @@ export function QuickCapture() {
   const [busy, setBusy] = useState(false);
 
   const start = async () => {
-    const seed = text.trim();
-    if (!seed || busy) return;
+    const moment = text.trim();
+    if (!moment || busy) return;
     setBusy(true);
     try {
-      const res = await api<Created>("/api/interviews", { method: "POST", json: { kind: "story", seed } });
-      const id = res.interview?.id ?? res.id;
-      if (!id) throw new Error("The interview was created but no id came back.");
-      router.push(`/interviews/${id}`);
+      const { interview } = await api<Created>("/api/interviews", { method: "POST", json: { kind: "story", knownStory: moment } });
+      router.push(`/interviews/${interview.id}`);
     } catch (e) {
       toast((e as Error).message, "error");
       setBusy(false);

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { handle, ok } from "@/lib/http";
 import { requireProfile } from "@/lib/repo";
-import { deletePhoto, editPhoto, photoView, requireOwnedPhoto } from "@/lib/photos";
+import { deletePhoto, editPhoto, photoView, readJsonBody, requireOwnedPhoto } from "@/lib/photos";
 
 export const dynamic = "force-dynamic";
 
@@ -24,7 +24,7 @@ export const PATCH = handle(async (req: Request, ctx: Ctx) => {
   const { id } = await ctx.params;
   const profile = requireProfile();
   const photo = requireOwnedPhoto(profile.id, id);
-  const updated = editPhoto(photo, Patch.parse(await req.json()));
+  const updated = editPhoto(photo, Patch.parse(await readJsonBody(req)));
   return ok({ photo: photoView(updated) });
 });
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type KeyboardEvent } from "react";
+import { useRef, useState } from "react";
 import { format, parseISO } from "date-fns";
 import { Camera, Images, PenLine } from "lucide-react";
 import { Chip, Spinner, TONES, cx, toast } from "@/components/ui";
@@ -30,14 +30,6 @@ export function MemoryCard({ memory, pillars, onOpen, onPhotoAdded }: { memory: 
   const fileRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
 
-  const onKey = (e: KeyboardEvent) => {
-    if (e.target !== e.currentTarget) return;
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      onOpen();
-    }
-  };
-
   const upload = async (files: File[]) => {
     if (!files.length) return;
     setUploading(true);
@@ -55,14 +47,14 @@ export function MemoryCard({ memory, pillars, onOpen, onPhotoAdded }: { memory: 
   };
 
   return (
-    <article
-      role="button"
-      tabIndex={0}
-      onClick={onOpen}
-      onKeyDown={onKey}
-      aria-label={`Open story: ${memory.title}`}
-      className={cx("card card-interactive focus-ring flex cursor-pointer flex-col overflow-hidden text-left", memory.status === "archived" && "opacity-70")}
-    >
+    <article className={cx("card card-interactive relative flex flex-col overflow-hidden text-left", memory.status === "archived" && "opacity-70")}>
+      {/* The whole card opens the story; the "Add a photo" button sits above this layer and stays reachable. */}
+      <button
+        type="button"
+        onClick={onOpen}
+        aria-label={`Open story: ${memory.title}`}
+        className="focus-ring absolute inset-0 z-[1] cursor-pointer rounded-[inherit] focus-visible:[outline-offset:-3px]"
+      />
       <div className="relative aspect-[16/10] w-full">
         {memory.coverPhotoId ? (
           <PhotoImg id={memory.coverPhotoId} className="h-full w-full" alt="" />
@@ -78,7 +70,7 @@ export function MemoryCard({ memory, pillars, onOpen, onPhotoAdded }: { memory: 
               multiple
               className="sr-only"
               tabIndex={-1}
-              onClick={(e) => e.stopPropagation()}
+              aria-hidden
               onChange={(e) => {
                 void upload(Array.from(e.target.files ?? []));
                 e.target.value = "";
@@ -87,11 +79,9 @@ export function MemoryCard({ memory, pillars, onOpen, onPhotoAdded }: { memory: 
             <button
               type="button"
               disabled={uploading}
-              onClick={(e) => {
-                e.stopPropagation();
-                fileRef.current?.click();
-              }}
-              className="glass-strong focus-ring flex items-center gap-2 rounded-full px-4 py-2 t-footnote font-semibold transition-transform active:scale-95"
+              onClick={() => fileRef.current?.click()}
+              aria-label={uploading ? `Uploading a photo to ${memory.title}` : `Add a photo to ${memory.title}`}
+              className="glass-strong focus-ring relative z-[2] flex items-center gap-2 rounded-full px-4 py-2 t-footnote font-semibold transition-transform active:scale-95"
             >
               {uploading ? <Spinner className="size-4" /> : <Camera className="size-4 text-sys-orange" />}
               {uploading ? "Uploading…" : "Add a photo"}
@@ -130,7 +120,7 @@ export function MemoryCard({ memory, pillars, onOpen, onPhotoAdded }: { memory: 
                 {memory.postCount}
               </span>
             )}
-            <span>{shortDate(memory.createdAt)}</span>
+            <span suppressHydrationWarning>{shortDate(memory.createdAt)}</span>
           </span>
         </div>
       </div>

@@ -1,12 +1,13 @@
 import type { ReactNode } from "react";
 
 /** Apple Settings-style section: small header, inset grouped list, optional footer note. */
-export function Group({ id, title, footer, action, children }: { id?: string; title?: ReactNode; footer?: ReactNode; action?: ReactNode; children: ReactNode }) {
+export function Group({ id, title, footer, action, level = 2, children }: { id?: string; title?: ReactNode; footer?: ReactNode; action?: ReactNode; level?: 2 | 3; children: ReactNode }) {
+  const Heading = level === 2 ? "h2" : "h3";
   return (
     <section id={id} className="scroll-mt-24 space-y-2">
       {(title || action) && (
         <div className="flex items-end justify-between gap-3 px-4">
-          {title && <h3 className="t-footnote font-semibold uppercase tracking-wide text-label-2">{title}</h3>}
+          {title && <Heading className="t-footnote font-semibold uppercase tracking-wide text-label-2">{title}</Heading>}
           {action}
         </div>
       )}

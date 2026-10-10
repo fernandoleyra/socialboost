@@ -32,6 +32,7 @@ export function PhotoDropzone({
   subtitle,
   icon,
   onUploaded,
+  onBusyChange,
   acceptPaste = false,
   className,
 }: {
@@ -42,6 +43,8 @@ export function PhotoDropzone({
   subtitle?: ReactNode;
   icon?: ReactNode;
   onUploaded?: (photo: PhotoView) => void;
+  /** Called when the queue starts or finishes, so a parent can keep this zone mounted until it's done. */
+  onBusyChange?: (busy: boolean) => void;
   acceptPaste?: boolean;
   className?: string;
 }) {
@@ -53,6 +56,8 @@ export function PhotoDropzone({
   const running = useRef(false);
   const onUploadedRef = useRef(onUploaded);
   onUploadedRef.current = onUploaded;
+  const onBusyRef = useRef(onBusyChange);
+  onBusyRef.current = onBusyChange;
   const keySeq = useRef(0);
 
   const enqueue = useCallback(
@@ -110,6 +115,12 @@ export function PhotoDropzone({
     previews.current = live;
   }, [items]);
   useEffect(() => () => previews.current.forEach((u) => URL.revokeObjectURL(u)), []);
+
+  const busy = items.some((i) => i.status === "uploading" || i.status === "queued");
+  useEffect(() => {
+    onBusyRef.current?.(busy);
+  }, [busy]);
+  useEffect(() => () => onBusyRef.current?.(false), []);
 
   useEffect(() => {
     if (!acceptPaste) return;
@@ -172,7 +183,6 @@ export function PhotoDropzone({
       }}
     />
   );
-  const busy = items.some((i) => i.status === "uploading" || i.status === "queued");
 
   if (variant === "tile") {
     return (
@@ -243,6 +253,8 @@ export function PhotoDropzone({
           variant={hero ? "primary" : "tinted"}
           size={hero ? "md" : "sm"}
           icon={<ImagePlus className="size-4" />}
+          tabIndex={-1}
+          aria-hidden
           onClick={(e) => {
             e.stopPropagation();
             open();

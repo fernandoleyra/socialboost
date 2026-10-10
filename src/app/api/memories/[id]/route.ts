@@ -2,7 +2,7 @@ import { handle, ok } from "@/lib/http";
 import { logActivity } from "@/lib/db";
 import { deleteMemory, requireProfile } from "@/lib/repo";
 import { MemoryFieldsSchema, memoryPosts, patchMemory, postCountsByMemory, requireOwnedMemory } from "@/lib/memory";
-import { listPhotoViews } from "@/lib/photos";
+import { listPhotoViews, readJsonBody } from "@/lib/photos";
 
 export const dynamic = "force-dynamic";
 
@@ -25,7 +25,7 @@ export const PATCH = handle(async (req: Request, ctx: Ctx) => {
   const { id } = await ctx.params;
   const profile = requireProfile();
   const current = requireOwnedMemory(profile.id, id);
-  const patch = MemoryFieldsSchema.partial().parse(await req.json());
+  const patch = MemoryFieldsSchema.partial().parse(await readJsonBody(req));
   const memory = await patchMemory(current, patch);
   return ok({ memory: { ...memory, postCount: postCountsByMemory(profile.id).get(id) ?? 0 } });
 });

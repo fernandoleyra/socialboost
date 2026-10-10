@@ -58,6 +58,18 @@ export function newPillarId(): string {
   return `pl_${rand.slice(0, 10)}`;
 }
 
+/**
+ * The pillar id a memory belongs to. Memories store the pillar id, but older or hand-written
+ * data may hold the pillar's name; both resolve to the id. Unknown pillars → null.
+ */
+export function pillarIdOf(pillars: Pick<Pillar, "id" | "name">[], memoryPillar: string | null | undefined): string | null {
+  if (!memoryPillar) return null;
+  const byId = pillars.find((p) => p.id === memoryPillar);
+  if (byId) return byId.id;
+  const name = memoryPillar.trim().toLowerCase();
+  return pillars.find((p) => p.name.trim().toLowerCase() === name)?.id ?? null;
+}
+
 /** First color not used by another pillar (cycles when all are taken). */
 export function nextPillarColor(pillars: Pick<Pillar, "color">[]): string {
   const used = new Set(pillars.map((p) => p.color));

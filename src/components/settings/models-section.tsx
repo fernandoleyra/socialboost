@@ -18,6 +18,7 @@ import {
   presetModels,
   pullAllCommand,
   pullCommand,
+  routesMissingModel,
   tasksUsingProvider,
   uniqueProviderId,
   type HealthReport,
@@ -64,6 +65,11 @@ export function ModelsSection({ initial }: { initial: AISettings }) {
   }, [dirty]);
 
   const persist = async (next: AISettings, message?: string): Promise<boolean> => {
+    const blank = routesMissingModel(next);
+    if (blank.length) {
+      toast(`Pick a model for ${blank.map((t) => TASK_INFO[t].label).join(", ")}, or turn ${blank.length === 1 ? "it" : "them"} off, before saving.`, "error");
+      return false;
+    }
     setSaving(true);
     try {
       const res = await api<{ settings: AISettings }>("/api/settings/ai", { method: "PUT", json: next });
@@ -160,7 +166,7 @@ export function ModelsSection({ initial }: { initial: AISettings }) {
       </div>
 
       {/* Presets */}
-      <Group title="Local presets" footer="Presets point every task at Ollama. Pull the models once in a terminal; Ollama keeps them on disk.">
+      <Group level={3} title="Local presets" footer="Presets point every task at Ollama. Pull the models once in a terminal; Ollama keeps them on disk.">
         <div className="grid divide-y divide-separator sm:grid-cols-2 sm:divide-x sm:divide-y-0">
           {PRESETS.map((p) => {
             const active = preset === p.id;
@@ -193,6 +199,7 @@ export function ModelsSection({ initial }: { initial: AISettings }) {
 
       {/* Providers */}
       <Group
+        level={3}
         title="Providers"
         action={
           <Button variant="plain" size="sm" icon={<Plus className="size-4" />} onClick={() => setSheet({ open: true, provider: null })}>
@@ -255,7 +262,7 @@ export function ModelsSection({ initial }: { initial: AISettings }) {
       </Group>
 
       {/* Routing */}
-      <Group title="Who does what" footer="Test sends a tiny prompt to the model and shows the reply and how long it took. Unsaved changes are saved first.">
+      <Group level={3} title="Who does what" footer="Test sends a tiny prompt to the model and shows the reply and how long it took. Unsaved changes are saved first.">
         {TASK_ORDER.map((task) => {
           const info = TASK_INFO[task];
           const route = draft.routes[task];
@@ -368,7 +375,7 @@ export function ModelsSection({ initial }: { initial: AISettings }) {
         </datalist>
       ))}
 
-      <Group title="Context window" footer="How much text a local model reads at once (Ollama num_ctx). Bigger lets the writer see more of your past posts and stories but needs more memory. 8K suits 7-14B models on 16 GB.">
+      <Group level={3} title="Context window" footer="How much text a local model reads at once (Ollama num_ctx). Bigger lets the writer see more of your past posts and stories but needs more memory. 8K suits 7-14B models on 16 GB.">
         <div className="list-row">
           <span className="flex-1 t-subhead font-medium">Tokens</span>
           <Select value={String(draft.numCtx)} onChange={(e) => setDraft((d) => ({ ...d, numCtx: Number(e.target.value) }))} className="w-40!" aria-label="Context window">

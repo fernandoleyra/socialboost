@@ -66,7 +66,7 @@ export function findPillar<P extends Pick<Pillar, "id" | "name">>(pillars: P[], 
 export type MemoryListItem = Memory & { postCount: number; score?: number };
 
 export const MEMORY_STATUS_LABEL: Record<Memory["status"], string> = {
-  raw: "Draft",
+  raw: "In progress",
   ready: "Ready",
   used: "Used",
   archived: "Archived",

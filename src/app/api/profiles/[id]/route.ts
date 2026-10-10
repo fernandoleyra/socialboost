@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { handle, ok } from "@/lib/http";
 import { deleteProfile, updateProfile } from "@/lib/repo";
+import { deleteProfilePhotos } from "@/lib/photos";
 
 const Patch = z.object({
   name: z.string().min(1).max(120).optional(),
@@ -17,6 +18,8 @@ export const PATCH = handle(async (req: Request, ctx: { params: Promise<{ id: st
 
 export const DELETE = handle(async (_req: Request, ctx: { params: Promise<{ id: string }> }) => {
   const { id } = await ctx.params;
+  // Remove image files first; the row cascade would otherwise orphan them in data/uploads.
+  deleteProfilePhotos(id);
   deleteProfile(id);
   return ok({ ok: true });
 });

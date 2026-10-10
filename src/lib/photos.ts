@@ -92,9 +92,9 @@ function usage(profileId: string): { titles: Map<string, string>; posts: Map<str
   return { titles, posts };
 }
 
-function toView(photo: Photo, u: ReturnType<typeof usage>): PhotoView {
+function toView(photo: Photo, u: ReturnType<typeof usage>, resume = true): PhotoView {
   const meta = readPhotoMeta(photo.id);
-  if (meta.captionStatus === "pending") resumeCaption(photo.id);
+  if (resume && meta.captionStatus === "pending") resumeCaption(photo.id);
   return {
     ...photo,
     meta,
@@ -103,8 +103,18 @@ function toView(photo: Photo, u: ReturnType<typeof usage>): PhotoView {
   };
 }
 
-export function photoView(photo: Photo): PhotoView {
-  return toView(photo, usage(photo.profileId));
+/** `resume: false` when the caller schedules the caption itself (fresh uploads use after()). */
+export function photoView(photo: Photo, opts: { resume?: boolean } = {}): PhotoView {
+  return toView(photo, usage(photo.profileId), opts.resume ?? true);
+}
+
+/** Read a JSON request body; malformed JSON is the client's mistake (400), not a server error. */
+export async function readJsonBody(req: Request): Promise<unknown> {
+  try {
+    return await req.json();
+  } catch {
+    throw new HttpError(400, "The request body isn't valid JSON.");
+  }
 }
 
 export function listPhotoViews(profileId: string, opts: { memoryId?: string | null; unassigned?: boolean } = {}): PhotoView[] {
@@ -208,6 +218,16 @@ export async function processUpload(profileId: string, file: File, opts: { memor
 export function deletePhoto(photo: Photo) {
   deletePhotoRow(photo.id);
   for (const f of [photoFilePath(photo, "full"), photoFilePath(photo, "thumb"), metaPath(photo.id)]) fs.rmSync(f, { force: true });
+}
+
+/**
+ * Delete every photo of a profile, files included. Call it BEFORE deleting the profile:
+ * the ON DELETE CASCADE removes the rows but would leave the JPEGs in data/uploads.
+ */
+export function deleteProfilePhotos(profileId: string): number {
+  const all = listPhotos(profileId);
+  for (const p of all) deletePhoto(p);
+  return all.length;
 }
 
 /* ------------------------------------------------------------------ */
