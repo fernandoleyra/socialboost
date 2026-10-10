@@ -3,13 +3,14 @@
 import { useEffect, useState } from "react";
 import { Check, Copy, RefreshCw } from "lucide-react";
 import { Button, Sheet, api, toast } from "@/components/ui";
+import { ConfirmSheet } from "@/components/photos/confirm-sheet";
 import { copyText } from "./helpers";
 
 /** Calendar subscription (iCalendar feed) with copy, open-in-app and reset. */
 export function SubscribeSheet({ open, path, onClose, onPathChange }: { open: boolean; path: string; onClose: () => void; onPathChange: (p: string) => void }) {
   const [origin, setOrigin] = useState("");
   const [copied, setCopied] = useState(false);
-  const [resetting, setResetting] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
   useEffect(() => setOrigin(window.location.origin), []);
   useEffect(() => {
     if (!copied) return;
@@ -21,18 +22,11 @@ export function SubscribeSheet({ open, path, onClose, onPathChange }: { open: bo
   const webcal = url.replace(/^https?:\/\//, "webcal://");
   const isLocal = /\/\/(localhost|127\.|192\.168\.|10\.|\[::1\])/.test(url);
 
+  /** Errors are shown by the confirmation sheet, which stays open so the person can retry. */
   const reset = async () => {
-    if (!window.confirm("Make a new link? Calendars subscribed with the old link stop updating.")) return;
-    setResetting(true);
-    try {
-      const res = await api<{ path: string }>("/api/calendar/ics", { method: "POST" });
-      onPathChange(res.path);
-      toast("New link ready. Subscribe again with it.");
-    } catch (err) {
-      toast((err as Error).message, "error");
-    } finally {
-      setResetting(false);
-    }
+    const res = await api<{ path: string }>("/api/calendar/ics", { method: "POST" });
+    onPathChange(res.path);
+    toast("New link ready. Subscribe again with it.");
   };
 
   return (
@@ -59,7 +53,7 @@ export function SubscribeSheet({ open, path, onClose, onPathChange }: { open: bo
           <a href={webcal} className="btn btn-primary">
             Open in Calendar
           </a>
-          <Button variant="plain" onClick={reset} loading={resetting} icon={<RefreshCw className="size-4" />}>
+          <Button variant="plain" onClick={() => setConfirmReset(true)} icon={<RefreshCw className="size-4" />}>
             Make a new link
           </Button>
         </div>
@@ -74,6 +68,14 @@ export function SubscribeSheet({ open, path, onClose, onPathChange }: { open: bo
           <li>The link contains a private key. Anyone with it can read your planned posts, so share it only with your own calendar.</li>
         </ul>
       </div>
+      <ConfirmSheet
+        open={confirmReset}
+        title="Make a new link?"
+        body="Calendars subscribed with the old link stop updating. You'll subscribe again with the new one."
+        confirmLabel="Make a new link"
+        onConfirm={reset}
+        onClose={() => setConfirmReset(false)}
+      />
     </Sheet>
   );
 }

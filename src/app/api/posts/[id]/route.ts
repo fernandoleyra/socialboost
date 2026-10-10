@@ -7,12 +7,15 @@ import { POST_STATUSES, type Post } from "@/lib/types";
 import { normalizeAngles, parseAngleField, serializeAngleField } from "@/lib/factory/angles";
 import { applyHumanEdit, postDetail, postLabel, requireMemory, requirePost } from "@/lib/factory/posts";
 import { checkStatusChange, STATUS_META } from "@/lib/factory/status";
+import { PUBLISHING_MARKER, STALE_PUBLISH_MS, publishingSince } from "@/lib/calendar/linkedin-format";
 
 export const dynamic = "force-dynamic";
 
 type Ctx = { params: Promise<{ id: string }> };
 
 const PRE_APPROVAL: Post["status"][] = ["idea", "draft", "review"];
+
+const sameInstant = (a: string | null, b: string | null) => a === b || (!!a && !!b && Date.parse(a) === Date.parse(b));
 
 /** GET /api/posts/[id] → { post, memory, photo, memoryPhotos, libraryPhotos } */
 export const GET = handle(async (_req: Request, ctx: Ctx) => {
@@ -73,10 +76,18 @@ export const PATCH = handle(async (req: Request, ctx: Ctx) => {
   // approved post is a scheduled one. Otherwise the scheduler would never pick it up.
   const status =
     patch.status === "approved" && PRE_APPROVAL.includes(post.status) && nextScheduled && Date.parse(nextScheduled) > Date.now() ? "scheduled" : patch.status;
+  const rescheduled = patch.scheduledAt !== undefined && !sameInstant(patch.scheduledAt, post.scheduledAt);
+  const statusChanged = !!status && status !== post.status;
+
+  // Same rule as the Calendar: no changes while the scheduler or "Publish now" is sending this text.
+  const publishing = publishingSince(post.error);
+  if (publishing && Date.now() - publishing.getTime() < STALE_PUBLISH_MS && (rescheduled || statusChanged || (patch.body !== undefined && patch.body !== post.body))) {
+    throw new HttpError(409, "This post is being published right now.", "Wait a moment, then refresh the page.");
+  }
   if (status && status !== post.status) {
     const check = checkStatusChange({ from: post.status, to: status, body: nextBody, scheduledAt: nextScheduled });
     if (!check.ok) throw new HttpError(400, check.message, check.hint);
-  } else if (post.status === "scheduled" && patch.scheduledAt !== undefined && patch.scheduledAt !== post.scheduledAt) {
+  } else if (post.status === "scheduled" && rescheduled) {
     // Moving a scheduled post: the new time must be valid too, or the scheduler would publish it at once.
     const check = checkStatusChange({ from: "approved", to: "scheduled", body: nextBody, scheduledAt: nextScheduled });
     if (!check.ok) throw new HttpError(400, check.message, check.hint);
@@ -92,7 +103,9 @@ export const PATCH = handle(async (req: Request, ctx: Ctx) => {
   if (patch.scheduledAt !== undefined) update.scheduledAt = patch.scheduledAt ? new Date(patch.scheduledAt).toISOString() : null;
   if (patch.angle !== undefined) {
     const field = parseAngleField(post.angle);
-    if (typeof patch.angle === "string") update.angle = patch.angle.trim().startsWith("{") ? patch.angle : serializeAngleField({ ...field, note: patch.angle });
+    // A JSON document is read like the stored column (validated angles, canonical structure ids);
+    // anything else is kept as the free-text note next to the current angles.
+    if (typeof patch.angle === "string") update.angle = serializeAngleField(patch.angle.trim().startsWith("{") ? parseAngleField(patch.angle) : { ...field, note: patch.angle });
     else {
       const [a] = normalizeAngles([patch.angle], field.selected?.structureId ?? "scene-lesson", 1);
       if (!a) throw new HttpError(400, "The angle needs a hook.");
@@ -100,6 +113,10 @@ export const PATCH = handle(async (req: Request, ctx: Ctx) => {
     }
   }
   if (status && status !== post.status) update.status = status;
+  // A new time or status means the person dealt with the post: an earlier slot's publish failure
+  // or "missed" note no longer applies, and the scheduler gets a fresh attempt at the new time.
+  // The in-flight marker stays (a stuck one asks the person to check LinkedIn first).
+  if ((rescheduled || statusChanged) && post.error && !post.error.startsWith(PUBLISHING_MARKER)) update.error = null;
   if (Object.keys(update).length) post = updatePost(post.id, update);
 
   if (update.status === "approved" || update.status === "scheduled" || update.status === "review") {

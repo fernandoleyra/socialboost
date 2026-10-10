@@ -230,7 +230,7 @@ export function storyBufferTarget(cadence: Cadence): number {
 export function hookOf(post: Pick<SnapshotPost, "body" | "angle">, max = 90): string {
   // posts.angle is a JSON document (see factory/angles.ts); fall back to the chosen angle's hook.
   const angle = parseAngleField(post.angle);
-  const line = (post.body.split("\n").find((l) => l.trim()) ?? angle.selected?.hook ?? angle.note ?? "").trim();
+  const line = (post.body.split("\n").find((l) => l.trim()) || angle.selected?.hook || angle.selected?.takeaway || angle.note).trim();
   if (!line) return "";
   return line.length > max ? line.slice(0, max - 1).trimEnd() + "…" : line;
 }

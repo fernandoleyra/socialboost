@@ -7,6 +7,7 @@ import { Check, ChevronLeft, CircleAlert, CircleCheck, Copy, ExternalLink, KeyRo
 import { Button, Card, Field, Input, PageHeader, Section, Textarea, api, toast } from "@/components/ui";
 import type { LinkedInSettings } from "@/lib/calendar/types";
 import { copyText, initials } from "@/components/calendar/helpers";
+import { ConfirmSheet } from "@/components/photos/confirm-sheet";
 
 function CopyField({ value, label }: { value: string; label: string }) {
   const [copied, setCopied] = useState(false);
@@ -67,7 +68,7 @@ export function LinkedInSetup({
   const [s, setS] = useState(initial);
   const [form, setForm] = useState({ clientId: initial.config.clientId, clientSecret: "", redirectUri: initial.config.redirectUri, apiVersion: initial.config.apiVersion });
   const [saving, setSaving] = useState(false);
-  const [disconnecting, setDisconnecting] = useState(false);
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const [token, setToken] = useState("");
   const [tokenSaving, setTokenSaving] = useState(false);
   const [notice, setNotice] = useState<{ kind: "ok" | "error"; text: string } | null>(connected ? { kind: "ok", text: "LinkedIn is connected." } : error ? { kind: "error", text: error } : null);
@@ -96,18 +97,11 @@ export function LinkedInSetup({
     }
   };
 
+  /** Errors are shown by the confirmation sheet, which stays open so the person can retry. */
   const disconnect = async () => {
-    if (!window.confirm(`Disconnect LinkedIn from ${profileName}? Scheduled posts will turn into reminders until you connect again.`)) return;
-    setDisconnecting(true);
-    try {
-      setS(await api<LinkedInSettings>("/api/linkedin", { method: "DELETE" }));
-      setNotice(null);
-      toast("Disconnected.");
-    } catch (err) {
-      toast((err as Error).message, "error");
-    } finally {
-      setDisconnecting(false);
-    }
+    setS(await api<LinkedInSettings>("/api/linkedin", { method: "DELETE" }));
+    setNotice(null);
+    toast("Disconnected.");
   };
 
   const connectToken = async (e: FormEvent) => {
@@ -171,7 +165,7 @@ export function LinkedInSetup({
                 <Plug className="size-4" aria-hidden />
                 Reconnect
               </a>
-              <Button variant="destructive" onClick={disconnect} loading={disconnecting} icon={<Unplug className="size-4" />}>
+              <Button variant="destructive" onClick={() => setConfirmDisconnect(true)} icon={<Unplug className="size-4" />}>
                 Disconnect
               </Button>
             </div>
@@ -303,6 +297,15 @@ export function LinkedInSetup({
         The access token is stored in your local database (data/socialboost.db) and only sent to LinkedIn. LinkedIn doesn&apos;t give personal apps access to post analytics, so results
         are entered on the Insights page.
       </p>
+
+      <ConfirmSheet
+        open={confirmDisconnect}
+        title={`Disconnect LinkedIn from ${profileName}?`}
+        body="Scheduled posts turn into reminders with copy and open-LinkedIn until you connect again."
+        confirmLabel="Disconnect"
+        onConfirm={disconnect}
+        onClose={() => setConfirmDisconnect(false)}
+      />
     </div>
   );
 }

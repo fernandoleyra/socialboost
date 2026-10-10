@@ -29,7 +29,7 @@ import { uploadPhoto } from "@/components/photos/upload";
 import { Button, Chip, IconButton, Input, Sheet, Typing, api, cx, streamText, toast } from "@/components/ui";
 import { hookOf, parseAngleField, replaceHook, type Angle, type HookOption } from "@/lib/factory/angles";
 import { cleanPost, toClipboard } from "@/lib/factory/clean";
-import { publishingSince } from "@/lib/calendar/linkedin-format";
+import { VERIFY_MESSAGE, publishingSince } from "@/lib/calendar/linkedin-format";
 import { LINKEDIN_MAX_CHARS, autofix, lintPost, type LintHit } from "@/lib/factory/lint";
 import { REVISE_PRESETS, type RevisePresetId } from "@/lib/factory/prompts";
 import { combineScore, isCritiqueFresh, qualityGate } from "@/lib/factory/quality";
@@ -273,6 +273,8 @@ export function PostEditor(props: EditorProps) {
   const archived = post.status === "archived";
   /** Set while the scheduler or a "Publish now" is sending the post (M6's in-flight marker). */
   const publishingAt = publishingSince(post.error);
+  /** An attempt that LinkedIn didn't confirm: it may be live already. */
+  const unconfirmed = post.error === VERIFY_MESSAGE;
 
   const refresh = useCallback(async () => {
     const d = await api<PostDetail>(`/api/posts/${id}`);
@@ -662,9 +664,9 @@ export function PostEditor(props: EditorProps) {
               </Chip>
             )}
             {post.error && !published && (
-              <Chip tone={publishingAt ? "blue" : "red"}>
+              <Chip tone={publishingAt ? "blue" : unconfirmed ? "yellow" : "red"}>
                 {publishingAt ? <Send className="size-3" /> : <AlertTriangle className="size-3" />}
-                {publishingAt ? "Publishing" : "Publish failed"}
+                {publishingAt ? "Publishing" : unconfirmed ? "Check LinkedIn" : "Publish failed"}
               </Chip>
             )}
           </div>
@@ -701,7 +703,7 @@ export function PostEditor(props: EditorProps) {
           <div className="flex min-w-0 items-start gap-3">
             {publishingAt ? <Send className="mt-0.5 size-5 shrink-0 text-sys-blue" /> : <AlertTriangle className="mt-0.5 size-5 shrink-0 text-sys-red" />}
             <div className="min-w-0">
-              <div className="t-headline">{publishingAt ? "Publishing to LinkedIn…" : "Not on LinkedIn yet"}</div>
+              <div className="t-headline">{publishingAt ? "Publishing to LinkedIn…" : unconfirmed ? "Check LinkedIn first" : "Not on LinkedIn yet"}</div>
               <p className="t-footnote text-label-2 [overflow-wrap:anywhere]">
                 {publishingAt ? (
                   <>

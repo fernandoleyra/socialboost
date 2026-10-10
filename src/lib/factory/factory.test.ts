@@ -5,7 +5,7 @@ import { cleanPost, stripUnicodeStyling } from "./clean";
 import { changeRatio, diffWords } from "./diff";
 import { aboveFold, foldIndex } from "./fold";
 import { findPillar } from "./pillars";
-import { anglesPrompt, critiquePrompt, draftPrompt, factsText, storyFacts, instructionsFromCritique, instructionsFromLint, languageName, presetInstruction, revisePrompt, targetWords, writingRules, type PromptContext } from "./prompts";
+import { anglesPrompt, critiquePrompt, draftPrompt, factsText, hookChars, storyFacts, instructionsFromCritique, instructionsFromLint, languageName, openingPrompt, presetInstruction, revisePrompt, targetWords, writingRules, type PromptContext } from "./prompts";
 import { buildQuality, combineScore, critiqueScore, dropUnfoundedInventions, hashBody, isCritiqueFresh, qualityGate, relint } from "./quality";
 import { fromLocalInput, nextOpenSlots, toLocalInput } from "./schedule";
 import { checkStatusChange, statusAfterGeneration, statusAfterHumanEdit } from "./status";
@@ -351,6 +351,54 @@ describe("prompts", () => {
     expect(out).toHaveLength(3);
     expect(instructionsFromLint([{ rule: "copied-notes", severity: "error", message: "" }])[0]).toContain("Don't paste my notes");
     expect(instructionsFromCritique(crit(5, { issues: ['Invented: "312 customers"', "Weak hook"], suggestions: ["Open on the timeout."] }))).toEqual(['Remove this invented detail: "312 customers"', "Open on the timeout."]);
+  });
+
+  it("asks for figures exactly as the notes write them, as digits, without new currencies", () => {
+    const rules = writingRules(ctx(), getStructure("scene-lesson")).join("\n");
+    expect(rules).toMatch(/Write every number with digits, exactly as my notes write it \("[^"]+"/);
+    expect(rules).toContain("Never spell numbers out in words.");
+    expect(rules).toContain('My notes name no currency, so never add one');
+    const withCurrency = writingRules(ctx({ memory: { ...ctx().memory!, details: ["refunded 84,000 euros"] } }), null).join("\n");
+    expect(withCurrency).toContain("Keep currencies exactly as my notes write them");
+  });
+
+  it("keeps line 1 short, with the author's own hook length when known", () => {
+    expect(hookChars(null)).toBe(140);
+    expect(hookChars(stats({ avgHookChars: 100 }))).toBe(115);
+    expect(hookChars(stats({ avgHookChars: 400 }))).toBe(180);
+    expect(writingRules(ctx({ stats: null }), null).join("\n")).toContain("under 140 characters");
+    const revise = last(revisePrompt(ctx(), "Line one.\n\nLine two.", ["Warmer."]));
+    expect(revise).toContain("Keep the line breaks");
+    expect(revise).toContain("Never join it with the next paragraph");
+  });
+
+  it("aligns an extractor's title with the story's own figures", () => {
+    const c = ctx({ memory: { ...ctx().memory!, title: "Turning down a $40k rebrand", story: "We were turning down 40k of work." } });
+    expect(c.memory!.title).toContain("$40k");
+    expect(factsText(c)).toContain("Turning down a 40k rebrand");
+    expect(factsText(c)).not.toContain("$");
+    expect(last(draftPrompt(c, null, "scene-lesson"))).not.toContain("$40k");
+    expect(draftPrompt(c, null, "scene-lesson").messages[0].content).toContain("Title: Turning down a 40k rebrand");
+  });
+
+  it("turns figure findings into exact replacements", () => {
+    const out = instructionsFromLint([
+      { rule: "invented-currency", severity: "error", message: "", match: "dollars", suggest: "40k" },
+      { rule: "number-words", severity: "warn", message: "", match: "sixty percent", suggest: "60%" },
+      { rule: "number-words", severity: "warn", message: "", match: "forty thousand", suggest: "40k" },
+    ]);
+    expect(out).toEqual([
+      'My notes don\'t use "dollars" for these amounts. Remove the currency and write each amount exactly as my notes do ("40k").',
+      'Write these numbers with digits, exactly as my notes do: "sixty percent" → "60%", "forty thousand" → "40k".',
+    ]);
+  });
+
+  it("asks the model to shorten only the opening line", () => {
+    const p = openingPrompt(ctx({ stats: null }), "A very long first paragraph.");
+    expect(p.messages).toHaveLength(1);
+    expect(last(p)).toContain("<post>\nA very long first paragraph.\n</post>");
+    expect(last(p)).toContain("under 140 characters");
+    expect(last(p).trim().endsWith("Output only the rewritten paragraph.")).toBe(true);
   });
 
   it("fills the CTA preset from the strategy and refuses without one", () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Decision } from "./engine";
-import { interviewerMessages, interviewerSystemPrompt, pillarsPrompt, storyCardPrompt, type InterviewContext } from "./prompts";
+import { directorNote, interviewerMessages, interviewerSystemPrompt, pillarsPrompt, positioningPrompt, storyCardPrompt, type InterviewContext } from "./prompts";
 import type { TranscriptMessage } from "./types";
 
 const ctx: InterviewContext = {
@@ -44,6 +44,20 @@ describe("interviewer prompt", () => {
     expect(last.content).toContain("When was this, and where were you?");
   });
 
+  it("forbids praise and asks only for a neutral echo", () => {
+    for (const kind of ["story", "positioning"] as const) {
+      const sys = interviewerSystemPrompt({ ...ctx, kind });
+      expect(sys).toMatch(/Never judge or praise/);
+      expect(sys).toMatch(/repeated neutrally/);
+    }
+    expect(interviewerSystemPrompt({ ...ctx, kind: "positioning" })).not.toMatch(/got it/i);
+    for (const stage of ["probe", "pos-question", "photo", "pos-wrap"] as const) {
+      const note = directorNote(ctx, { ...probe, stage });
+      expect(note, stage).not.toMatch(/reacting/);
+      expect(note, stage).toMatch(/repeated neutrally|no praise/);
+    }
+  });
+
   it("folds the note into the last user turn for servers that reject a late system message", () => {
     const msgs = interviewerMessages(ctx, thread, probe, "protocol", { noteInUserTurn: true });
     expect(msgs.some((m) => m.role === "system")).toBe(false);
@@ -62,6 +76,19 @@ describe("extraction prompts", () => {
     expect(user).toMatch(/Use ONLY facts Marta said/);
     expect(user).toMatch(/If they said little, keep it short/);
     expect(user).not.toMatch(/100 to 300 words/);
+  });
+
+  it("story card: figures exactly as said, no added currency", () => {
+    const { user } = storyCardPrompt({ name: "Marta Ruiz", headline: "", language: "en", pillars: [], transcript: "Marta: 40k budget", privacy: null });
+    expect(user).toMatch(/Numbers and amounts exactly as Marta wrote them/);
+    expect(user).toMatch(/Never add or convert a currency/);
+  });
+
+  it("positioning: the interviewer's examples are not answers", () => {
+    const { user } = positioningPrompt({ name: "Marta Ruiz", headline: "", language: "en", transcript: "t" });
+    expect(user).toMatch(/Examples listed inside the interviewer's questions are not answers/);
+    expect(user).toMatch(/avoidTopics: only topics Marta said, in their own words/);
+    expect(user).not.toMatch(/politics|money/i);
   });
 
   it("pillars: grounded in what was said, with moment-based story prompts", () => {

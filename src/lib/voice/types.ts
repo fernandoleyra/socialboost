@@ -85,7 +85,7 @@ export type ImportRequest = z.infer<typeof ImportRequestSchema>;
 /** POST /api/voice/import/linkedin: a Member Data Portability token, used for this one import and never stored. */
 export const LinkedInImportRequestSchema = z.object({
   token: z
-    .string()
+    .string({ error: "Paste your LinkedIn access token first." })
     .trim()
     .min(20, "That doesn't look like a LinkedIn access token. Copy the whole token from the OAuth Token Tool.")
     .max(4000, "That's too long for a LinkedIn access token."),

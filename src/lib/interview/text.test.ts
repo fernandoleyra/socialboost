@@ -12,6 +12,8 @@ import {
   isSubstantive,
   keepVerbatimQuotes,
   parseDbDate,
+  stripPraise,
+  stripPraisePrefix,
   truncate,
   formatDay,
 } from "./text";
@@ -211,5 +213,66 @@ describe("isFiller", () => {
     expect(isFiller("What an amazing story!")).toBe(true);
     expect(isFiller("That's a long night to be on the phone with a client.")).toBe(false);
     expect(isFiller("A tray of croissants next to the laptop.")).toBe(false);
+  });
+});
+
+describe("praise filter", () => {
+  it("drops the verdicts a 4B interviewer opened with in a real run", () => {
+    for (const line of [
+      "That's a clear goal.",
+      "Direct and funny is exactly the right tone.",
+      "Family Agency sounds like a great fit for founder-led brands.",
+      "Six weeks to transform sales is a bold claim.",
+      "A promise kept every day is the right way to think about it.",
+      "Behind the scenes is perfect for showing your process.",
+      "That photo of the queue outside the shop was exactly the proof you needed.",
+      "What a moment.",
+      "Love the detail about the flour.",
+      "You made a smart call.",
+      "Eso es clave.",
+    ]) {
+      expect(stripPraise(line), line).toBe("");
+    }
+  });
+
+  it("keeps the factual part of a reflection with a verdict tacked on", () => {
+    expect(stripPraise("They need someone who understands the business side, that's key.")).toBe("They need someone who understands the business side.");
+    expect(stripPraise("Generic but hungry, that's a tough spot to be in.")).toBe("Generic but hungry.");
+    expect(stripPraise("Most companies need to fix their offer, that is a strong take.")).toBe("Most companies need to fix their offer.");
+    expect(stripPraise("Great, so you were alone in the office.")).toBe("So you were alone in the office.");
+    expect(stripPraise("That's key: they need someone who reads a P&L.")).toBe("They need someone who reads a P&L.");
+  });
+
+  it("leaves neutral reflections alone", () => {
+    for (const line of [
+      "Bread and flour on the table in that back office.",
+      "You asked to see the sales by product instead of the logo right away.",
+      "She almost ended the meeting.",
+      "That sounds like a long night for everyone involved there.",
+      "That's when everything changed.",
+      "The office was right above the shop.",
+      "It was exactly 8 in the morning.",
+      "You said it was the right call.",
+      "Thanks for the photo of the whiteboard.",
+      "Valencia at night, wow.",
+    ]) {
+      expect(stripPraise(line), line).toBe(line);
+    }
+  });
+
+  it("strips a praise lead-in from a question but never the question", () => {
+    expect(stripPraisePrefix("That's a clear goal, so which three topics could you talk about for an hour?")).toBe("Which three topics could you talk about for an hour?");
+    expect(stripPraisePrefix("Great, what happened next?")).toBe("What happened next?");
+    expect(stripPraisePrefix("Exactly when did she say that?")).toBe("Exactly when did she say that?");
+    expect(stripPraisePrefix("What did you say first?")).toBe("What did you say first?");
+  });
+
+  it("filters praise out of streamed interviewer turns", async () => {
+    const q = await collect(["That's a clear goal. ", "Which three topics could you talk about for an hour with no notes?"], Q);
+    expect(q.out).toBe("Which three topics could you talk about for an hour with no notes?");
+    const kept = await collect(["They need someone who understands the business side, that's key. ", "What do you sell?"], Q);
+    expect(kept.out).toBe("They need someone who understands the business side. What do you sell?");
+    const statement = await collect(["Direct and funny is exactly the right tone."], { mode: "statement" as const, maxStatements: 1, maxChars: 300 });
+    expect(statement.out).toBe("");
   });
 });

@@ -324,7 +324,7 @@ export const POSITIONING_AREAS: PositioningArea[] = [
     label: "Boundaries",
     hint: "Off-limits topics, tone",
     goal: "topics that are off-limits and how personal or playful they want to sound",
-    question: { id: "P16", text: "What's off-limits for your posts: clients, your employer, family, politics, money? And how personal are you willing to get?" },
+    question: { id: "P16", text: "Is there anything you'd never post about? And how personal are you willing to get?" },
   },
   {
     key: "rhythm",

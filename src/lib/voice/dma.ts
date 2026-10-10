@@ -92,12 +92,15 @@ export function errorMessageOf(body: string): string {
   return message.length > 200 ? `${message.slice(0, 199)}…` : message;
 }
 
-/** Turn a failed HTTP answer into what the person should do about it. */
+/**
+ * Turn a failed HTTP answer into what the person should do about it. LinkedIn's 401 becomes our
+ * 400: SocialBoost's own 401 means "not signed in to SocialBoost" (see proxy.ts).
+ */
 export function dmaErrorFor(status: number, message = ""): DmaError {
   switch (status) {
     case 401:
       return new DmaError(
-        401,
+        400,
         "LinkedIn didn't accept that token.",
         `It has expired, or it was created without the ${DMA_SCOPE} scope. Create a new one in the OAuth Token Tool with that scope ticked.`,
       );
@@ -105,7 +108,7 @@ export function dmaErrorFor(status: number, message = ""): DmaError {
       return new DmaError(
         403,
         "LinkedIn won't share your posts with this token.",
-        `This only works for members located in the EEA or Switzerland, with a token from an app that has the "Member Data Portability API (Member)" product. Elsewhere, use the LinkedIn data export (Shares.csv).`,
+        `This only works for members located in the EEA or Switzerland, with a token created for an app that has the "Member Data Portability API (Member)" product and the ${DMA_SCOPE} scope ticked. Elsewhere, use the LinkedIn data export (Shares.csv).`,
       );
     case 426:
       return new DmaError(

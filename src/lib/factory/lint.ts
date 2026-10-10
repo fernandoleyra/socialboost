@@ -11,9 +11,18 @@
 import type { LintIssue, VoiceStats } from "@/lib/types";
 import { compiledLexicon, compilePattern, escapeRegex } from "./lexicon";
 import { stripUnicodeStyling } from "./clean";
+import { currencyIssues, digitFixes, extractNumbers, parseNumber, spelledNumbers } from "./numbers";
+
+export { extractNumbers } from "./numbers";
 
 export type LintSeverity = LintIssue["severity"];
-export type LintHit = LintIssue & { start?: number; end?: number; fixable?: boolean };
+export type LintHit = LintIssue & {
+  start?: number;
+  end?: number;
+  fixable?: boolean;
+  /** What the flagged text should say instead, when the story tells us ("60%" for "sixty percent"). */
+  suggest?: string;
+};
 export type LintResult = { issues: LintHit[]; score: number };
 export type LintOptions = {
   /** Everything the post may state as fact (memory, photo note, profile). Enables provenance checks. */
@@ -69,6 +78,8 @@ export const RULE_LABELS: Record<string, string> = {
   "uniform-rhythm": "Same-length sentences",
   "unverified-number": "Number not in the story",
   "unverified-quote": "Quote not in the story",
+  "invented-currency": "Currency not in the story",
+  "number-words": "Numbers in words",
   "copied-notes": "Copied from your notes",
 };
 
@@ -131,41 +142,13 @@ const wordsOf = (s: string) => s.match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) ?? []
 /* Numbers & quotes provenance (R22)                                   */
 /* ------------------------------------------------------------------ */
 
+/** Single number words a story may use ("forty people" backs up a lone "40"; "a dozen", "half"). */
 const NUMBER_WORDS: Record<string, number> = {
   one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
   eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19,
   twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90, hundred: 100, thousand: 1000,
   dozen: 12, half: 0.5,
 };
-
-type NumToken = { raw: string; value: number; start: number; end: number; small: boolean };
-
-const NUM_RE = /(?<![\p{L}\p{N}])([$€£¥₹]\s?)?(\d{1,3}(?:[,'’ ]\d{3})+(?:\.\d+)?|\d+(?:[.,]\d+)?)(\s?(?:%|k|m|bn|x)(?![\p{L}]))?/giu;
-
-function parseNumber(core: string): number {
-  // "1,400" / "8 500" / "1’000" → thousands; "1.5" / "2,5" → decimal.
-  if (/^\d{1,3}(?:[,'’ ]\d{3})+(?:\.\d+)?$/.test(core)) return Number(core.replace(/[,'’ ]/g, ""));
-  if (/^\d+,\d{1,2}$/.test(core)) return Number(core.replace(",", "."));
-  if (/^\d{1,3}(?:\.\d{3})+$/.test(core)) return Number(core.replace(/\./g, ""));
-  return Number(core.replace(/,/g, ""));
-}
-
-export function extractNumbers(text: string): NumToken[] {
-  const out: NumToken[] = [];
-  NUM_RE.lastIndex = 0;
-  let m: RegExpExecArray | null;
-  while ((m = NUM_RE.exec(text))) {
-    const [raw, currency, core, suffixRaw] = m;
-    let value = parseNumber(core);
-    const suffix = (suffixRaw ?? "").trim().toLowerCase();
-    if (suffix === "k") value *= 1e3;
-    else if (suffix === "m") value *= 1e6;
-    else if (suffix === "bn") value *= 1e9;
-    const small = !currency && !suffix && Number.isInteger(value) && value < 10;
-    out.push({ raw: raw.trim(), value, start: m.index, end: m.index + raw.length, small });
-  }
-  return out;
-}
 
 function factNumbers(facts: string): Set<number> {
   const set = new Set<number>();
@@ -174,11 +157,8 @@ function factNumbers(facts: string): Set<number> {
     // "84k" might be written as "84" + "thousand" in the story; keep the bare core too.
     set.add(parseNumber(n.raw.replace(/[^\d.,'’ ]/g, "").trim() || "0"));
   }
+  for (const n of spelledNumbers(facts)) set.add(n.value);
   for (const w of facts.toLowerCase().match(/\p{L}+/gu) ?? []) if (w in NUMBER_WORDS) set.add(NUMBER_WORDS[w]);
-  // Compound number words ("two hundred", "three thousand").
-  const re = /\b(one|two|three|four|five|six|seven|eight|nine|ten|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)[\s-]+(hundred|thousand)\b/gi;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(facts))) set.add(NUMBER_WORDS[m[1].toLowerCase()] * NUMBER_WORDS[m[2].toLowerCase()]);
   return set;
 }
 
@@ -212,9 +192,16 @@ type Ctx = {
   allow: string[];
 };
 
-function push(ctx: Ctx, rule: string, severity: LintSeverity, message: string, start?: number, end?: number) {
+function push(ctx: Ctx, rule: string, severity: LintSeverity, message: string, start?: number, end?: number, suggest?: string) {
   const match = start !== undefined && end !== undefined ? ctx.text.slice(start, end) : undefined;
-  ctx.issues.push({ rule, severity, message, ...(match !== undefined ? { match, start, end } : {}), ...(FIXABLE.has(rule) ? { fixable: true } : {}) });
+  ctx.issues.push({
+    rule,
+    severity,
+    message,
+    ...(match !== undefined ? { match, start, end } : {}),
+    ...(FIXABLE.has(rule) ? { fixable: true } : {}),
+    ...(suggest ? { suggest } : {}),
+  });
 }
 
 function allowed(ctx: Ctx, match: string): boolean {
@@ -520,6 +507,20 @@ export function lintPost(text: string, voiceStats?: VoiceStats | null, opts: Lin
       if (listMarkers.has(n.start - lineStart) && /^\s*\d{1,2}[.)]/.test(text.slice(lineStart, n.end + 1))) continue;
       if (known.has(n.value)) continue;
       push(ctx, "unverified-number", "warn", `"${n.raw}" isn't in the story. Make sure it's real, or cut it.`, n.start, n.end);
+    }
+    // Numbers in words must come from the story too, and read as digits when the story has digits.
+    for (const n of spelledNumbers(text)) {
+      if (n.small || known.has(n.value)) continue;
+      push(ctx, "unverified-number", "warn", `"${n.raw}" isn't in the story. Make sure it's real, or cut it.`, n.start, n.end);
+    }
+    for (const f of digitFixes(text, opts.facts)) {
+      push(ctx, "number-words", "warn", `Your story says "${f.replacement}". Write it with digits, the way you said it: figures in words are slower to read.`, f.start, f.end, f.replacement);
+    }
+    // A currency the story doesn't name ("40k" turned into "forty thousand dollars").
+    for (const c of currencyIssues(text, opts.facts)) {
+      const say = c.suggest ? ` Write it the way you said it: "${c.suggest}".` : " Write amounts the way you said them.";
+      const msg = c.kind === "absent" ? `Your story never names a currency, so "${c.raw}" is a guess.${say}` : `Your story gives this amount without "${c.raw}".${say}`;
+      push(ctx, "invented-currency", c.kind === "absent" ? "error" : "warn", msg, c.start, c.end, c.suggest ?? undefined);
     }
     const facts = opts.facts;
     eachMatch(text, /["“]([^"“”\n]{8,})["”]/g, (m) => {

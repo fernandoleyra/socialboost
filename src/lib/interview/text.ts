@@ -283,6 +283,99 @@ export function isFiller(sentence: string): boolean {
   return (wordCount(t) <= 6 && FILLER.test(t)) || (wordCount(t) <= 8 && PRAISE.test(t));
 }
 
+/*
+ * Praise and validation (research 02 §3.2: mirror the user's words, never grade them). Small
+ * models open nearly every question with a verdict: "That's a clear goal.", "Direct and funny is
+ * exactly the right tone.", "Family Agency sounds like a great fit…". A neutral echo of the
+ * user's words survives; the verdict goes.
+ */
+
+/** Words that grade what the user said. */
+const VERDICT = String.raw`(?<![\p{L}])(?:great|good|clear|smart|wise|strong|bold|brave|powerful|amazing|impressive|fascinating|valuable|important|key|crucial|essential|vital|wonderful|brilliant|incredible|fantastic|remarkable|inspiring|perfect|ideal|excellent|solid|compelling|insightful|thoughtful|meaningful|interesting|refreshing|admirable|healthy|sharp|clever|nice|lovely|beautiful|cool|awesome|right|spot[- ]on|tough|hard|difficult|huge|big|honest|rare|helpful|useful|ambitious|realistic|sensible|fair|exciting|courageous|vivid|relatable|classic|textbook|game[- ]changer|win)(?![\p{L}-])`;
+/** Narrower set for "<their words> is/sounds VERDICT": words that only ever grade. */
+const PREDICATE_VERDICT = String.raw`(?:great|perfect|ideal|the right|smart|wise|bold|brave|powerful|amazing|impressive|fascinating|valuable|key|crucial|essential|wonderful|brilliant|incredible|fantastic|remarkable|inspiring|excellent|solid|compelling|insightful|refreshing|admirable|spot[- ]on|exactly\s+(?:the|what))(?![\p{L}-])`;
+const DEGREE = String.raw`(?:(?:a|an|the|such|so|really|very|truly|quite|pretty|super|incredibly|exactly|absolutely|definitely|certainly|genuinely|clearly|indeed|just|one|of|kind|sort)\s+){0,3}`;
+
+/** "That's a clear goal", "Sounds like a great fit", "What a moment", "It's a tough spot". */
+const VERDICT_OPENER = new RegExp(
+  String.raw`^(?:that['’]?s|that is|this is|it['’]?s|it is|sounds|it sounds|that sounds|this sounds|seems|that seems|feels|looks)(?:\s+like)?\s+${DEGREE}${VERDICT}`,
+  "iu",
+);
+const WHAT_A = /^what an?\s/i;
+/** "Great, …", "Love that …", "Exactly the right tone." */
+const PRAISE_WORD_OPENER =
+  /^(?:great|good|nice|love|i love|i like|perfect|exactly|absolutely|wonderful|brilliant|fantastic|excellent|awesome|amazing|beautiful|lovely|wow|impressive|fair enough|spot on|well said|well put|totally|indeed|congrats|congratulations|kudos|bravo|respect|powerful|fascinating|incredible|interesting|classic|love it|love that|oh|ah|ooh|genial|perfecto|excelente|estupendo|fant[aá]stico|buen[ií]simo|incre[ií]ble|me encanta|qu[eé] bien)(?![\p{L}])/iu;
+/** "<their words> is exactly the right tone", "… sounds like a great fit", "… was exactly the proof you needed". */
+const VERDICT_PREDICATE = new RegExp(
+  String.raw`(?<![\p{L}])(?:is|was|are|were|sounds?|seems?|feels?|looks?)\s+(?:like\s+)?${DEGREE}${PREDICATE_VERDICT}`,
+  "iu",
+);
+/** "You made a smart call", "You did the right thing". */
+const YOU_VERDICT = new RegExp(String.raw`^you(?:['’]re| are| were|['’]ve| have| made| did| took| handled| showed)\b[^.!?]{0,40}?(?:${VERDICT}|\bwell\b|the right thing)`, "iu");
+/** Reporting what the user said is a reflection, even with an evaluative word in it. */
+const REPORTED = /\b(?:you said|you told|you called|you felt|you thought|in your words|she said|he said|they said)\b/i;
+/** A trailing verdict clause: "…, that's key." / "…, that is a strong take." */
+const TRAILING_VERDICT = new RegExp(
+  String.raw`\s*[,;:—–-]\s*(?:and\s+)?(?:that['’]?s|that is|which is|this is|it['’]?s|what an?|such an?)\s+${DEGREE}${VERDICT}[^.!?]*([.!?]*)$`,
+  "iu",
+);
+/** Spanish: "Eso es clave.", "Qué buena historia." */
+const ES_VERDICT = /^(?:(?:eso|esto) es|es|qu[eé])\s+(?:(?:muy|un|una|exactamente|realmente|tan)\s+){0,2}(?:clave|genial|perfect[oa]|fundamental|important[e]|interesante|buen[oa]|gran|excelente|incre[ií]ble|valios[oa]|potente|brillante|fant[aá]stic[oa])(?![\p{L}])/iu;
+
+/** A clause that can't stand on its own once the verdict before it is gone. */
+const SUBORDINATE = /^(?:especially|when|because|since|which|who|that|if|as|although|though|while|or|given|considering)\b/i;
+
+const capitalize = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
+const sentenceWords = (s: string) => s.split(/\s+/).filter(Boolean).length;
+
+/**
+ * The part of a statement worth keeping once praise is removed: "" for a pure verdict ("That's a
+ * clear goal."), the factual part for "They need someone who gets the business side, that's key."
+ * Neutral reflections come back unchanged.
+ */
+export function stripPraise(sentence: string): string {
+  let t = sentence.trim();
+  if (!t) return "";
+  // "Great, so you were alone in the office." → "So you were alone in the office."
+  const lead = PRAISE_WORD_OPENER.exec(t);
+  if (lead) {
+    const rest = t.slice(lead[0].length);
+    const sep = /^\s*[,!.:;—–-]+\s*/.exec(rest);
+    if (!sep) return "";
+    t = capitalize(rest.slice(sep[0].length).trim());
+    if (!t || isFiller(t)) return "";
+  }
+  if (WHAT_A.test(t) || ES_VERDICT.test(t)) return "";
+  const opener = VERDICT_OPENER.exec(t);
+  if (opener) {
+    // "That's key: they need someone who …" keeps what follows the verdict.
+    const after = /^[^,:;—–]*[,:;—–]\s*/.exec(t.slice(opener[0].length));
+    const rest = after ? t.slice(opener[0].length + after[0].length).replace(/^(?:so|and|but)\s+/i, "").trim() : "";
+    return sentenceWords(rest) >= 3 && !SUBORDINATE.test(rest) ? capitalize(rest) : "";
+  }
+  if (!REPORTED.test(t)) {
+    if (YOU_VERDICT.test(t)) return "";
+    if (sentenceWords(t) <= 18 && VERDICT_PREDICATE.test(t)) return "";
+  }
+  const trailing = TRAILING_VERDICT.exec(t);
+  if (trailing) {
+    const kept = t.slice(0, trailing.index).trim();
+    return sentenceWords(kept) >= 2 ? `${kept}${/[.!?]$/.test(kept) ? "" : "."}` : "";
+  }
+  return t;
+}
+
+/** A question minus a praise lead-in: "That's a clear goal, so which topics …?" → "Which topics …?" */
+export function stripPraisePrefix(question: string): string {
+  const t = question.trim();
+  const lead = PRAISE_WORD_OPENER.exec(t) ?? VERDICT_OPENER.exec(t);
+  if (!lead) return t;
+  const sep = /^[^,:;—–.!]*[,:;—–.!]+\s*/.exec(t.slice(lead[0].length));
+  if (!sep) return t;
+  const rest = t.slice(lead[0].length + sep[0].length).replace(/^(?:so|and|but|now)\s+/i, "").trim();
+  return sentenceWords(rest) >= 3 ? capitalize(rest) : t;
+}
+
 function tidySentence(s: string): string {
   let t = s.trim();
   const quotes = (t.match(/["\u201c\u201d]/g) ?? []).length;
@@ -330,17 +423,20 @@ export async function* filterTurn(source: AsyncIterable<string>, opts: TurnFilte
     pieces.push(piece);
   };
   const handle = (sentence: string) => {
-    const s = tidySentence(sentence);
-    if (!s) return;
-    if (QUESTION_END.test(s)) {
+    const tidy = tidySentence(sentence);
+    if (!tidy) return;
+    if (QUESTION_END.test(tidy)) {
       if (opts.mode === "question") {
         asked = true;
-        emit(opts.accept && opts.fallbackQuestion && !opts.accept(s) ? opts.fallbackQuestion : s);
+        const q = stripPraisePrefix(tidy);
+        emit(opts.accept && opts.fallbackQuestion && !opts.accept(q) ? opts.fallbackQuestion : q);
       }
       stop = true;
       return;
     }
-    if (isFiller(s)) return;
+    if (isFiller(tidy)) return;
+    const s = stripPraise(tidy);
+    if (!s) return;
     if (statements < opts.maxStatements && emittedChars + s.length <= opts.maxChars) {
       statements++;
       emit(s);

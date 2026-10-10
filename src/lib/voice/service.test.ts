@@ -87,7 +87,7 @@ describe("importFromLinkedIn", () => {
 
   it("explains a snapshot that isn't ready, a bad token, and an unknown shape", async () => {
     await expect(svc.importFromLinkedIn(profile, TOKEN, { fetch: linkedIn([]) })).rejects.toMatchObject({ status: 404, message: "LinkedIn hasn't sent any posts yet." });
-    await expect(svc.importFromLinkedIn(profile, TOKEN, { fetch: async () => json(401, { message: "Invalid access token" }) })).rejects.toMatchObject({ status: 401 });
+    await expect(svc.importFromLinkedIn(profile, TOKEN, { fetch: async () => json(401, { message: "Invalid access token" }) })).rejects.toMatchObject({ status: 400, message: "LinkedIn didn't accept that token." });
     await expect(svc.importFromLinkedIn(profile, TOKEN, { fetch: linkedIn([[{ Body: "hello there" }]]) })).rejects.toMatchObject({ status: 502, message: expect.stringContaining("Body") });
     await expect(svc.importFromLinkedIn(profile, "  ", {})).rejects.toMatchObject({ status: 400 });
   });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { StrategySchema, type Strategy } from "@/lib/types";
-import { cadenceDays, cardToMemory, evenWeights, mergeStrategy, samePillar, tidyList, extractSummary } from "./outputs";
+import { cadenceDays, cardToMemory, evenWeights, groundAvoidTopics, groundPositioning, mergeStrategy, samePillar, tidyList, extractSummary, type SaidMessage } from "./outputs";
 import { PositioningExtractSchema, storyCardSchema } from "./schemas";
 import {
   coverageCheckPrompt,
@@ -149,6 +149,94 @@ describe("mergeStrategy", () => {
     const s = mergeStrategy(existing, extract({ goals: ["New goal"] }), { language: "en" });
     expect(s.goals).toEqual(goals);
     expect(s.pillars[0]).toMatchObject({ id: "p1", name: "Banks", weight: 100, color: "blue" });
+  });
+});
+
+/** The story answers from the real end-to-end run: "40k" with no currency anywhere. */
+const STORY_ANSWERS = [
+  "Last March a founder of a bakery chain in Valencia asked us for a full rebrand. 40k budget. In the first workshop I asked to see their sales by product instead of their logo.",
+  "We found that 60% of revenue came from 4 products and nobody knew it. We killed the rebrand and spent 6 weeks redesigning the offer and the shop window. Sales went up 23% in two months.",
+  "I felt scared, honestly. We were turning down 40k of work. But afterwards she sent me a photo of a queue outside the shop and wrote 'ok, you were right'.",
+];
+
+describe("figures in extracted memories", () => {
+  it("removes a currency the user never named and keeps the bare number", () => {
+    const card = storyCardSchema([]).parse({
+      title: "Turning down a $40k rebrand",
+      summary: "A bakery founder dropped a forty thousand dollar rebrand after seeing sixty percent of revenue came from four products.",
+      story: "We were turning down 40k of work.",
+      details: ["$40k budget", "60% revenue", "23% sales increase"],
+      lesson: "Sell the problem before the solution.",
+      angles: ["The moment I told a founder to kill their $40k rebrand"],
+    });
+    const m = cardToMemory(card, { userTexts: STORY_ANSWERS, pillars: [], presetPillarId: null, coverageStrength: 4 });
+    expect(m.title).toBe("Turning down a 40k rebrand");
+    expect(m.summary).toBe("A bakery founder dropped a 40k rebrand after seeing 60% of revenue came from 4 products.");
+    expect(m.details).toEqual(["40k budget", "60% revenue", "23% sales increase"]);
+    expect(m.angles).toEqual(["The moment I told a founder to kill their 40k rebrand"]);
+  });
+
+  it("keeps a currency the user did use", () => {
+    const card = storyCardSchema([]).parse({ title: "Refunding €84k in one afternoon", details: ["84,000 euros"] });
+    const m = cardToMemory(card, { userTexts: ["We refunded 84,000 euros in one afternoon."], pillars: [], presetPillarId: null, coverageStrength: 3 });
+    expect(m.title).toBe("Refunding €84k in one afternoon");
+    expect(m.details).toEqual(["84,000 euros"]);
+  });
+});
+
+/** The positioning run: the interviewer listed "money" as an option; the user only excluded politics and family. */
+const POSITIONING: SaidMessage[] = [
+  { role: "assistant", content: "What do you want LinkedIn to do for you?" },
+  { role: "user", content: "Their pain is that agencies sell them decks and not results. They spend 40k on a rebrand and nothing changes in sales." },
+  { role: "assistant", content: "Most companies need to fix their offer, that is a strong take. What's off-limits for your posts: clients, your employer, family, politics, money?" },
+  {
+    role: "user",
+    content:
+      "Topics: behind the scenes of client work, lessons from running an agency of 12 people, and opinions on marketing for founders. I don't want to talk about politics or my family.",
+  },
+  { role: "assistant", content: "How often could you post?" },
+  { role: "user", content: "Contrarian: rebrands are usually a waste of money. The sprint is around 18k euros." },
+];
+
+describe("grounding the positioning extract", () => {
+  it("drops off-limits topics that only the interviewer named", () => {
+    expect(groundAvoidTopics(["Politics", "Family", "Money", "Clients"], POSITIONING)).toEqual(["Politics", "Family"]);
+  });
+
+  it("accepts short direct answers to the off-limits question, in any form", () => {
+    const t: SaidMessage[] = [
+      { role: "assistant", content: "Anything you'd rather keep private or off-limits?" },
+      { role: "user", content: "Religion. My kids." },
+    ];
+    expect(groundAvoidTopics(["Religious topics", "Children", "Kids"], t)).toEqual(["Religious topics", "Kids"]);
+    expect(groundAvoidTopics(["Política", "Familia"], [{ role: "user", content: "No quiero hablar de política ni de mi familia." }])).toEqual(["Política", "Familia"]);
+  });
+
+  it("grounds the whole extract: topics and figures", () => {
+    const x = groundPositioning(
+      {
+        ...extract({ audiencePains: ["Spending $40k on a rebrand with no change in sales"], offers: ["6-week brand sprint, around 18k euros"], avoidTopics: ["Politics", "Money"] }),
+        pillars: [{ name: "The promise over the logo", description: "", storyPrompts: ["When did you tell a founder a $40k rebrand was a waste?"] }],
+      },
+      POSITIONING,
+    );
+    expect(x.avoidTopics).toEqual(["Politics"]);
+    expect(x.audiencePains).toEqual(["Spending 40k on a rebrand with no change in sales"]);
+    expect(x.offers).toEqual(["6-week brand sprint, around 18k euros"]);
+    expect(x.pillars[0].storyPrompts).toEqual(["When did you tell a founder a 40k rebrand was a waste?"]);
+  });
+
+  it("aligns generated pillars with the extract's own figures when merging", () => {
+    const s = mergeStrategy(
+      null,
+      extract({
+        audiencePains: ["Spending 40k on a rebrand with no change in sales"],
+        pillars: [{ name: "Promise over logo", description: "Why a forty thousand dollar rebrand rarely moves sales.", storyPrompts: ["Describe the moment you told a founder a $40k rebrand was a waste of money."] }],
+      }),
+      { language: "en" },
+    );
+    expect(s.pillars[0].description).toBe("Why a 40k rebrand rarely moves sales.");
+    expect(s.pillars[0].storyPrompts).toEqual(["Describe the moment you told a founder a 40k rebrand was a waste of money."]);
   });
 });
 

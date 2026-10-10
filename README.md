@@ -30,9 +30,10 @@ and have a human pass before anything goes out. SocialBoost runs that whole proc
   possible angles, a story-depth score and its photos. Semantic search. Stories without a photo are flagged until you add one.
 - **Photos** — drop in candid shots; they're auto-rotated, stripped of location metadata, resized for LinkedIn, and
   described by a local vision model so the right photo can be matched to the right post.
-- **Voice** — import your past posts (paste, LinkedIn data export `Shares.csv`, or a browser helper on your own activity
-  page). SocialBoost measures your style (length, rhythm, lists, emojis, hashtags, hooks) and writes a style guide.
-  Your best posts are used as examples when drafting. Add posts from creators you admire as structure references.
+- **Voice** — import your past posts (paste, LinkedIn data export `Shares.csv`, or — for members in the EEA and
+  Switzerland — LinkedIn's Member Data Portability API). SocialBoost measures your style (length, rhythm, lists, emojis,
+  hashtags, hooks) and writes a style guide. Your best posts are used as examples when drafting. Add posts from
+  creators you admire as structure references.
 - **Studio** — the factory. Pick a story, choose one of three angles, stream a draft, and see AI tells highlighted
   (banned phrases, "it's not X, it's Y", em-dash habits, staircase formatting, hook length vs. the "see more" fold).
   One-tap revisions, critique scores, version history, a LinkedIn preview with the photo.
@@ -104,8 +105,9 @@ behind a sign-in screen (the calendar feed gets its own read-only key). Put it b
 4. Paste the client ID and secret into **Settings → LinkedIn** and click **Connect**.
 
 Notes from LinkedIn's current platform rules: access tokens last 60 days and self-serve apps get no refresh token,
-so you reconnect every two months (the app warns you). LinkedIn's API can't read your past posts or analytics for
-personal profiles — use the data export for posts and enter/import metrics in Insights.
+so you reconnect every two months (the app warns you). This publishing app can't read your past posts or analytics
+for personal profiles — bring posts into Voice by pasting them or uploading `Shares.csv` from the data export (members
+in the EEA and Switzerland can also use LinkedIn's Member Data Portability API there), and enter/import metrics in Insights.
 
 ## The workflow
 

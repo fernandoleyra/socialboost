@@ -14,6 +14,7 @@
  *    change at ±15 points (and keep a 5-point floor) so positioning doesn't drift.
  */
 
+import { matchStructureId } from "@/lib/factory/structures";
 import { dayKeyOf, safeTimezone, weekdayOf, zonedParts } from "./time";
 import { WEEKDAY_LONG } from "./slots";
 
@@ -197,7 +198,10 @@ function groupBy(posts: Measured[], keyOf: (p: Measured) => { key: string; label
 
 const bySmoothed = (a: GroupStat, b: GroupStat) => b.smoothed - a.smoothed || b.count - a.count || a.label.localeCompare(b.label);
 
-/** Structure id and opening type the Studio recorded in posts.angle (JSON), when present. */
+/**
+ * Structure id and opening type the Studio recorded in posts.angle (JSON, see factory/angles.ts),
+ * when present. Structure ids are mapped to the library's canonical ids, like the Studio reads them.
+ */
 export function angleInfo(raw: string | null | undefined): { structureId: string | null; hookType: string | null } {
   const text = (raw ?? "").trim();
   if (!text.startsWith("{")) return { structureId: null, hookType: null };
@@ -205,7 +209,7 @@ export function angleInfo(raw: string | null | undefined): { structureId: string
     const j = JSON.parse(text) as { selected?: { structureId?: unknown; hookType?: unknown } | null };
     const s = j.selected;
     return {
-      structureId: s && typeof s.structureId === "string" && s.structureId ? s.structureId : null,
+      structureId: s && typeof s.structureId === "string" && s.structureId ? (matchStructureId(s.structureId) ?? s.structureId) : null,
       hookType: s && typeof s.hookType === "string" && s.hookType ? s.hookType : null,
     };
   } catch {

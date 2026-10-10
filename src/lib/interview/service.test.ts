@@ -205,7 +205,8 @@ describe("interview service against a fake local model", () => {
     expect(res.strategy?.pillars.map((p) => p.name)).toEqual(["Cash flow", "Succession", "Modern finance"]);
     expect(res.strategy?.pillars.reduce((s, p) => s + p.weight, 0)).toBe(100);
     expect(res.strategy?.cadence.postsPerWeek).toBe(3);
-    expect(repo.getStrategy(profile.id)?.avoidTopics).toEqual(["Politics"]);
+    // The fake extractor claims "Politics" is off-limits, but this user never said so: grounding drops it.
+    expect(repo.getStrategy(profile.id)?.avoidTopics).toEqual([]);
   });
 
   it("targets pillars: auto picks the neediest, null means any topic", () => {

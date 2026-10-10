@@ -1,8 +1,10 @@
 /**
  * Turning model output into stored data: story card → memory (with quote provenance
  * checks) and positioning extract → Strategy (merged with what the user already has).
- * Pure and unit-tested.
+ * Figures are put back the way the user said them, and only the user's own words can
+ * put a topic on the off-limits list. Pure and unit-tested.
  */
+import { alignFigures } from "@/lib/factory/numbers";
 import { PILLAR_COLORS, normalizeStrategy } from "@/lib/strategy";
 import { StrategySchema, type ExtractedMemory, type Pillar, type Strategy } from "@/lib/types";
 import type { PositioningExtract, StoryCard, ExtractedPillar } from "./schemas";
@@ -41,22 +43,130 @@ export function cardToMemory(
   const pillar = opts.presetPillarId && opts.pillars.some((p) => p.id === opts.presetPillarId) ? opts.presetPillarId : modelPillar;
   const modelStrength = Number.isFinite(card.strength) ? Math.round(card.strength) : 3;
   const strength = Math.max(1, Math.min(5, Math.round((Math.max(1, Math.min(5, modelStrength)) + opts.coverageStrength) / 2)));
-  const title = clean(card.title).replace(/^["'“]|["'”]$/g, "").slice(0, 120) || "Untitled story";
+  // Numbers and currencies as the user said them: "40k" never becomes "$40k" or "forty thousand".
+  const said = opts.userTexts.join("\n");
+  const fig = (text: string) => alignFigures(text, said);
+  const title = fig(clean(card.title).replace(/^["'“]|["'”]$/g, "")).slice(0, 120) || "Untitled story";
   return {
     title,
-    summary: clean(card.summary),
-    story: cleanBlock(card.story),
-    when: clean(card.when),
-    place: clean(card.place),
+    summary: fig(clean(card.summary)),
+    story: fig(cleanBlock(card.story)),
+    when: fig(clean(card.when)),
+    place: fig(clean(card.place)),
     people: tidyList(card.people, 10),
     emotions: tidyList(card.emotions, 8).map((e) => e.toLowerCase()),
-    details: tidyList(card.details, 12),
+    details: tidyList(card.details.map(fig), 12),
     quotes: keepVerbatimQuotes(tidyList(card.quotes, 8), opts.userTexts).slice(0, 4),
-    lesson: clean(card.lesson),
+    lesson: fig(clean(card.lesson)),
     pillar,
     tags: tidyList(card.tags, 8).map((t) => t.toLowerCase().replace(/^#/, "")),
-    angles: tidyList(card.angles, 4),
+    angles: tidyList(card.angles.map(fig), 4),
     strength,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Positioning extract: only the user's own words count                */
+/* ------------------------------------------------------------------ */
+
+export type SaidMessage = { role: "user" | "assistant"; content: string };
+
+const fold = (s: string) =>
+  s
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+
+/** Words too generic to tie a topic to what was said ("personal topics", "my work"). */
+const TOPIC_STOPWORDS = new Set(
+  "the and or of my our their his her its about any all to in on for with from topics topic things thing stuff posts post personal life work talk talking anything everything de la el los las lo mi mis tu su sus y o del al sobre temas tema cosas nada todo".split(" "),
+);
+
+/** Crude stems that survive plurals and close variants: "politics"/"political"/"política" → "polit". */
+function topicStems(text: string): string[] {
+  return (fold(text).match(/\p{L}+/gu) ?? [])
+    .filter((w) => w.length >= 3 && !TOPIC_STOPWORDS.has(w))
+    .map((w) => w.replace(/ies$/, "y").replace(/(?:es|s)$/, "").slice(0, 5));
+}
+
+/** A sentence that rules something out ("I don't want to talk about politics", "nada de política"). */
+const EXCLUSION_CUE =
+  /(?<![\p{L}])(?:don['’]?t|do not|doesn['’]?t|won['’]?t|will not|wouldn['’]?t|never|not|no|avoid\w*|off[- ]limits|private|rather not|prefer not|keep (?:out|away|it out|that out)|stay away|leave (?:out|aside)|nothing about|exclud\w*|without|nunca|jam[aá]s|evit\w*|prefiero no|nada de|fuera|privad[oa]s?)(?![\p{L}])/iu;
+/** The interviewer asked what is off-limits. */
+const BOUNDARY_QUESTION = /off[- ]limits|\bavoid|\bprivate\b|\bboundar|never (?:post|share|talk)|(?:won['’]?t|don['’]?t want to) (?:post|share|talk)|fuera de|\bevitar|\bprivad/i;
+
+const sentencesOf = (text: string) =>
+  text
+    .split(/(?<=[.!?…])\s+|\n+/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+
+/**
+ * Keep only off-limits topics the user ruled out in their own words. Options the interviewer
+ * listed in a question ("clients, family, politics, money?") are not answers: a topic needs a
+ * stem in a user sentence that rules something out, or in a short direct answer to the
+ * off-limits question.
+ */
+export function groundAvoidTopics(topics: string[], transcript: SaidMessage[]): string[] {
+  const support = new Set<string>();
+  transcript.forEach((m, i) => {
+    if (m.role !== "user") return;
+    const prev = transcript.slice(0, i).reverse().find((x) => x.role === "assistant");
+    const answersBoundary = !!prev && BOUNDARY_QUESTION.test(prev.content);
+    for (const sentence of sentencesOf(m.content)) {
+      const short = sentence.split(/\s+/).length <= 6;
+      if (EXCLUSION_CUE.test(sentence) || (answersBoundary && short)) for (const st of topicStems(sentence)) support.add(st);
+    }
+  });
+  return topics.filter((t) => topicStems(t).some((st) => support.has(st)));
+}
+
+/** All the free text of an extract, for checking figures. */
+function extractText(x: Omit<PositioningExtract, "pillars">): string {
+  return [
+    x.positioning,
+    ...x.goals,
+    x.audienceWho,
+    ...x.audiencePains,
+    ...x.audienceDesires,
+    ...x.expertise,
+    ...x.offers,
+    ...x.beliefs,
+    ...x.contrarianTakes,
+    ...x.avoidTopics,
+    x.cta,
+    x.notes,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+/**
+ * Hold a positioning extract to the transcript: off-limits topics must come from the user's own
+ * messages, and figures read the way the user wrote them (no added currencies). Run it on the
+ * model's output before anything else uses it (pillar generation, mergeStrategy).
+ */
+export function groundPositioning<T extends Omit<PositioningExtract, "pillars"> & { pillars?: ExtractedPillar[] }>(x: T, transcript: SaidMessage[]): T {
+  const said = transcript
+    .filter((m) => m.role === "user")
+    .map((m) => m.content)
+    .join("\n");
+  const fig = (text: string) => alignFigures(text, said);
+  return {
+    ...x,
+    positioning: fig(x.positioning),
+    goals: x.goals.map(fig),
+    audienceWho: fig(x.audienceWho),
+    audiencePains: x.audiencePains.map(fig),
+    audienceDesires: x.audienceDesires.map(fig),
+    expertise: x.expertise.map(fig),
+    offers: x.offers.map(fig),
+    beliefs: x.beliefs.map(fig),
+    contrarianTakes: x.contrarianTakes.map(fig),
+    avoidTopics: groundAvoidTopics(x.avoidTopics, transcript),
+    cta: fig(x.cta),
+    notes: fig(x.notes),
+    ...(x.pillars ? { pillars: x.pillars.map((p) => ({ ...p, name: fig(p.name), description: fig(p.description), storyPrompts: p.storyPrompts.map(fig) })) } : {}),
   };
 }
 
@@ -196,6 +306,10 @@ export function mergeStrategy(existing: Strategy | null, x: PositioningExtract, 
       : base.cadence;
 
   const notes = clean(x.notes);
+  // Pillars are written from a summary of the extract; their figures must read like the extract's.
+  const said = extractText(x);
+  const fig = (text: string) => alignFigures(text, said);
+  const pillarsIn = x.pillars.map((p) => ({ ...p, name: fig(p.name), description: fig(p.description), storyPrompts: p.storyPrompts.map(fig) }));
   // Same normalization as PUT /api/strategy, so the editor, Calendar and Insights get valid pillar ids and colors.
   return normalizeStrategy(StrategySchema.parse({
     ...base,
@@ -210,7 +324,7 @@ export function mergeStrategy(existing: Strategy | null, x: PositioningExtract, 
     offers: union(base.offers, x.offers, 8),
     beliefs: union(base.beliefs, x.beliefs, 12),
     contrarianTakes: union(base.contrarianTakes, x.contrarianTakes, 12),
-    pillars: mergePillars(base.pillars, x.pillars, makeId),
+    pillars: mergePillars(base.pillars, pillarsIn, makeId),
     avoidTopics: union(base.avoidTopics, x.avoidTopics, 12),
     cta: pick(x.cta, base.cta),
     cadence,

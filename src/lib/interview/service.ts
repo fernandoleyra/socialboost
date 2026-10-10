@@ -40,7 +40,7 @@ import {
   threadPhotoDeferred,
   type Decision,
 } from "./engine";
-import { cardToMemory, extractSummary, mergeStrategy } from "./outputs";
+import { cardToMemory, extractSummary, groundPositioning, mergeStrategy } from "./outputs";
 import {
   coverageCheckPrompt,
   formatTranscript,
@@ -463,8 +463,13 @@ async function finishPositioning(profile: Profile, interview: Interview, msgs: T
     language: profile.language,
     transcript: formatTranscript(msgs, profile.name, transcriptBudget(24000, 1200)),
   });
-  const core = await timed(() =>
-    chatJson(PositioningCoreSchema, { task: "extractor", system: prompt.system, messages: [{ role: "user", content: prompt.user }], maxTokens: 1200 }),
+  // Ground the extract in what the person actually said: drops off-limits topics that only appeared
+  // in the interviewer's own questions and strips currencies the person never named.
+  const core = groundPositioning(
+    await timed(() =>
+      chatJson(PositioningCoreSchema, { task: "extractor", system: prompt.system, messages: [{ role: "user", content: prompt.user }], maxTokens: 1200 }),
+    ),
+    msgs,
   );
   const summary = extractSummary({ ...core, pillars: [] }) || formatTranscript(msgs, profile.name, 6000);
   const p = pillarsPrompt({ name: profile.name, language: profile.language, summary });

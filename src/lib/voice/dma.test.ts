@@ -56,7 +56,7 @@ describe("readSnapshotPage", () => {
 
 describe("errors", () => {
   it("maps LinkedIn statuses to what the person should do", () => {
-    expect(dmaErrorFor(401)).toMatchObject({ status: 401, hint: expect.stringContaining("r_dma_portability_self_serve") });
+    expect(dmaErrorFor(401)).toMatchObject({ status: 400, hint: expect.stringContaining("r_dma_portability_self_serve") });
     expect(dmaErrorFor(403)).toMatchObject({ status: 403, hint: expect.stringMatching(/EEA or Switzerland.*Shares\.csv/) });
     expect(dmaErrorFor(426)).toMatchObject({ status: 502, hint: expect.stringContaining(DMA_API_VERSION) });
     expect(dmaErrorFor(429).status).toBe(429);
@@ -98,7 +98,7 @@ describe("fetchShareSnapshot", () => {
 
   it("throws a clear error when the first page fails", async () => {
     for (const [status, expected] of [
-      [401, 401],
+      [401, 400],
       [403, 403],
       [426, 502],
     ] as const) {

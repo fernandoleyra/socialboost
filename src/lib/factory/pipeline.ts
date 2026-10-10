@@ -9,8 +9,10 @@ import { AnglesResponseSchema, HooksResponseSchema, cleanHook, normalizeAngles, 
 import { cleanPost } from "./clean";
 import { loadContext, type FactoryContext } from "./context";
 import { lintPost, type LintResult } from "./lint";
+import { alignFigures } from "./numbers";
+import { openingTooLong, restoreOpening, splitOpening } from "./opening";
 import { applyHumanEdit, postLabel } from "./posts";
-import { anglesPrompt, critiquePrompt, draftPrompt, hooksPrompt, instructionsFromCritique, instructionsFromLint, revisePrompt, type Prompt } from "./prompts";
+import { anglesPrompt, critiquePrompt, draftPrompt, hookChars, hooksPrompt, instructionsFromCritique, instructionsFromLint, openingPrompt, revisePrompt, type Prompt } from "./prompts";
 import { buildQuality, dropUnfoundedInventions, isCritiqueFresh, qualityGate, relint } from "./quality";
 import { REWRITABLE, statusAfterGeneration } from "./status";
 import { getStructure, recommendStructures, type StructureId } from "./structures";
@@ -58,22 +60,68 @@ function requireRewritable(post: Post) {
   if (!REWRITABLE.includes(post.status)) throw new HttpError(409, post.status === "published" ? "This post is already published." : "This post is archived.", "Start a new post from the same story instead.");
 }
 
+/** What a text may state as fact: the story, or for a post without one, the text it was written from. */
+function factsFor(ctx: FactoryContext, extraFacts?: string): string | undefined {
+  return ctx.memoryFull ? ctx.facts : extraFacts ? `${ctx.facts}\n${extraFacts}` : undefined;
+}
+
 function lintFor(ctx: FactoryContext, body: string, extraFacts?: string): LintResult {
-  const facts = ctx.memoryFull ? ctx.facts : extraFacts ? `${ctx.facts}\n${extraFacts}` : undefined;
-  return lintPost(body, ctx.stats, { facts, notes: ctx.memoryFull?.story || undefined, neverSay: ctx.neverSay });
+  return lintPost(body, ctx.stats, { facts: factsFor(ctx, extraFacts), notes: ctx.memoryFull?.story || undefined, neverSay: ctx.neverSay });
 }
 
 function setAngleField(post: Post, field: AngleField, extra: Partial<Post> = {}): Post {
   return updatePost(post.id, { angle: serializeAngleField(field), ...extra });
 }
 
-/** Persist a generated text: clean it, lint it, version it, move the status along. */
-function finalizeGeneration(postId: string, ctx: FactoryContext, raw: string, source: "ai" | "revision", note: string, extraFacts?: string): Post {
-  const body = cleanPost(raw);
-  if (!body) throw new LLMError("The model returned an empty post.", "Try again, or choose a larger writer model in Settings → Models.");
+const wordTotal = (t: string) => t.split(/\s+/).filter(Boolean).length;
+
+/**
+ * Line 1 has to land before "…see more". When a generation runs past the fold: split the line
+ * after its first sentence(s); failing that, one quick model pass on that line alone; failing
+ * that, put the previous version's opening line back on top.
+ */
+async function keepHookShort(ctx: FactoryContext, body: string, opts: { before: string | null; facts?: string; signal?: AbortSignal }): Promise<string> {
+  if (!openingTooLong(body)) return body;
+  const split = splitOpening(body, hookChars(ctx.stats));
+  if (split) return split;
+  const lines = body.split("\n");
+  const idx = lines.findIndex((l) => l.trim());
+  try {
+    const raw = await chat({ task: "writer", ...messages(openingPrompt(ctx, lines[idx])), maxTokens: 400, signal: opts.signal });
+    const cleaned = cleanPost(raw);
+    const fixed = opts.facts ? alignFigures(cleaned, opts.facts) : cleaned;
+    const n = wordTotal(lines[idx]);
+    if (fixed && !openingTooLong(fixed) && wordTotal(fixed) >= n * 0.6 && wordTotal(fixed) <= n * 1.5) {
+      lines.splice(idx, 1, fixed);
+      return lines.join("\n");
+    }
+  } catch (err) {
+    // The deterministic fallback below still gives a usable opening.
+    console.warn(`[factory] opening pass skipped: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  return restoreOpening(body, opts.before) ?? body;
+}
+
+/**
+ * Persist a generated text: clean it, put the author's own figures back ("forty thousand dollars"
+ * → "40k"), keep line 1 short, lint it, version it, move the status along. `before` is the text a
+ * revision started from.
+ */
+async function finalizeGeneration(
+  postId: string,
+  ctx: FactoryContext,
+  raw: string,
+  source: "ai" | "revision",
+  note: string,
+  opts: { before?: string | null; extraFacts?: string; signal?: AbortSignal } = {},
+): Promise<Post> {
+  const facts = factsFor(ctx, opts.extraFacts);
+  const cleaned = cleanPost(raw);
+  if (!cleaned) throw new LLMError("The model returned an empty post.", "Try again, or choose a larger writer model in Settings → Models.");
+  const body = await keepHookShort(ctx, facts ? alignFigures(cleaned, facts) : cleaned, { before: opts.before ?? null, facts, signal: opts.signal });
   const current = getPost(postId);
   if (!current) throw new HttpError(404, "Post not found");
-  const lint = lintFor(ctx, body, extraFacts);
+  const lint = lintFor(ctx, body, opts.extraFacts);
   saveGeneratedVersion(postId, body, source, note);
   const quality = relint(current.quality, body, lint.issues, lint.score);
   return updatePost(postId, { body, quality, status: statusAfterGeneration(current.status), error: null });
@@ -89,7 +137,8 @@ export async function generateAngles(post: Post, signal?: AbortSignal): Promise<
   const ctx = await loadContext(post);
   const recommended = recommendStructures(ctx.memoryFull!, { hasPhoto: !!post.photoId });
   const res = await slowSafe(() => chatJson(AnglesResponseSchema, { task: "writer", ...messages(anglesPrompt(ctx, recommended)), temperature: 0.7, maxTokens: 1400, signal }));
-  const angles = normalizeAngles(res.angles, recommended[0]);
+  // Hooks become the post's first line: figures exactly as the author said them.
+  const angles = normalizeAngles(res.angles, recommended[0]).map((a) => ({ ...a, hook: alignFigures(a.hook, ctx.facts), takeaway: alignFigures(a.takeaway, ctx.facts) }));
   if (!angles.length) throw new LLMError("The model didn't return usable angles.", "Try again, or choose a larger writer model in Settings → Models.");
   const field = parseAngleField(post.angle);
   const updated = setAngleField(post, { ...field, options: angles });
@@ -129,8 +178,8 @@ export async function draftStream(post: Post, input: { angle?: Angle | null; ang
   const ctx = await loadContext(current);
   const prompt = draftPrompt(ctx, angle, structureId);
   const gen = chatStream({ task: "writer", ...messages(prompt), maxTokens: WRITER_MAX_TOKENS, signal: input.signal });
-  const onDone = (full: string) => {
-    const saved = finalizeGeneration(current.id, ctx, full, "ai", `Draft · ${structure.name}`);
+  const onDone = async (full: string) => {
+    const saved = await finalizeGeneration(current.id, ctx, full, "ai", `Draft · ${structure.name}`, { signal: input.signal });
     logActivity("post", `Drafted: ${postLabel(saved)}`, { profileId: saved.profileId, refId: saved.id });
   };
   return { gen, onDone };
@@ -228,8 +277,8 @@ export async function reviseStream(post: Post, input: ReviseInput) {
   const original = current.memoryId ? undefined : base;
   const gen = chatStream({ task: "writer", ...messages(revisePrompt(ctx, base, changes)), maxTokens: WRITER_MAX_TOKENS, signal: input.signal });
   const note = input.note ?? (input.instruction?.trim() ? `Revised: ${input.instruction.trim().slice(0, 80)}` : "Revised");
-  const onDone = (full: string) => {
-    finalizeGeneration(current.id, ctx, full, "revision", note, original);
+  const onDone = async (full: string) => {
+    await finalizeGeneration(current.id, ctx, full, "revision", note, { before: base, extraFacts: original, signal: input.signal });
   };
   return { gen, onDone };
 }
@@ -243,10 +292,12 @@ export async function suggestHooks(post: Post, body?: string | null, signal?: Ab
   if (!text.trim()) throw new HttpError(400, "Draft the post first, then try other hooks.");
   const ctx = await loadContext(post);
   const res = await slowSafe(() => chatJson(HooksResponseSchema, { task: "writer", ...messages(hooksPrompt(ctx, text)), temperature: 0.85, maxTokens: 900, signal }));
+  const facts = factsFor(ctx, text);
   const seen = new Set<string>();
   const out: HookOption[] = [];
   for (const h of res.hooks) {
-    const t = cleanHook(h.text, { keepQuotes: h.type === "dialogue" });
+    const hook = cleanHook(h.text, { keepQuotes: h.type === "dialogue" });
+    const t = facts ? alignFigures(hook, facts) : hook;
     const key = t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
     if (!t || t.length > 230 || seen.has(key)) continue;
     seen.add(key);
@@ -260,12 +311,13 @@ export async function suggestHooks(post: Post, body?: string | null, signal?: Ab
 /* Autopilot                                                           */
 /* ------------------------------------------------------------------ */
 
-export type AutopilotStep = "angles" | "draft" | "critique" | "revise";
+export type AutopilotStep = "angles" | "draft" | "critique" | "revise" | "keep-draft";
 
 /**
  * One call, no streaming: angle (if none chosen) → draft → lint + critique → one revision when
- * the gate fails → critique again. Used by the Calendar's "Draft all". A draft that passes the
- * gate moves to Review; everything else stays a Draft for the human.
+ * the gate fails → critique again. Whichever of draft and revision scores higher (lint + critique)
+ * stays as the post; a rewrite never replaces a better draft. Used by the Calendar's "Draft all".
+ * A post that passes the gate moves to Review; everything else stays a Draft for the human.
  */
 export async function autopilot(post: Post, opts: { force?: boolean; signal?: AbortSignal } = {}): Promise<{ post: Post; steps: AutopilotStep[] }> {
   requireStory(post);
@@ -290,7 +342,7 @@ export async function autopilot(post: Post, opts: { force?: boolean; signal?: Ab
 
   const ctx = await loadContext(current);
   const draft = await slowSafe(() => chat({ task: "writer", ...messages(draftPrompt(ctx, angle, structure.id)), maxTokens: WRITER_MAX_TOKENS, signal: opts.signal }));
-  current = finalizeGeneration(current.id, ctx, draft, "ai", `Draft · ${structure.name} (autopilot)`);
+  current = await finalizeGeneration(current.id, ctx, draft, "ai", `Draft · ${structure.name} (autopilot)`, { signal: opts.signal });
   steps.push("draft");
 
   current = (await critiqueWith(ctx, current, current.body, opts.signal)).post;
@@ -299,11 +351,18 @@ export async function autopilot(post: Post, opts: { force?: boolean; signal?: Ab
   if (!qualityGate(current.quality, current.body).ready) {
     const changes = [...instructionsFromLint(current.quality?.lint ?? []), ...(current.quality?.critique ? instructionsFromCritique(current.quality.critique) : [])];
     if (changes.length) {
-      const revised = await slowSafe(() => chat({ task: "writer", ...messages(revisePrompt(ctx, current.body, changes)), maxTokens: WRITER_MAX_TOKENS, signal: opts.signal }));
-      current = finalizeGeneration(current.id, ctx, revised, "revision", "Autopilot fixes");
+      const first = current;
+      const revised = await slowSafe(() => chat({ task: "writer", ...messages(revisePrompt(ctx, first.body, changes)), maxTokens: WRITER_MAX_TOKENS, signal: opts.signal }));
+      current = await finalizeGeneration(current.id, ctx, revised, "revision", "Autopilot fixes", { before: first.body, signal: opts.signal });
       steps.push("revise");
       current = (await critiqueWith(ctx, current, current.body, opts.signal)).post;
       steps.push("critique");
+      // Both versions now have a fresh lint + critique score. Keep the better one.
+      if ((current.quality?.score ?? 0) < (first.quality?.score ?? 0)) {
+        saveGeneratedVersion(current.id, first.body, "ai", `Kept the first draft: it scored ${first.quality?.score ?? "–"}, the rewrite ${current.quality?.score ?? "–"}`);
+        current = updatePost(current.id, { body: first.body, quality: first.quality });
+        steps.push("keep-draft");
+      }
     }
   }
 

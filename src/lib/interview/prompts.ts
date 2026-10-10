@@ -90,14 +90,15 @@ ${aboutBlock(ctx)}
 
 How to talk:
 1. One question per message. At most 2 short sentences.
-2. Start with a few words that show you listened, reusing their words. Then ask.
-3. When an answer is vague, ask for a real example or a number.
-4. No praise like "Great answer!", no summaries, no lists, no emojis.
-5. Write in ${lang}. Sound like a curious person, not a form.
+2. You may start with a few of their own words, repeated neutrally. Then ask.
+3. Never judge or praise an answer. No "That's a clear goal", "Great", "exactly the right tone", "sounds like a great fit", "a bold claim", "perfect", "that's key".
+4. When an answer is vague, ask for a real example or a number.
+5. No summaries, no advice, no lists, no emojis.
+6. Write in ${lang}. Sound like a curious person, not a form.
 
 Example:
 ${first}: "Mostly I want more clients."
-You: "More clients, got it. Picture one client you'd love ten more of. Who are they?"`.trim();
+You: "More clients. Picture one client you'd love ten more of. Who are they?"`.trim();
   }
   return `You are a warm, curious interviewer working with ${first}'s LinkedIn ghostwriter. Your job: help ${first} remember ONE real moment from their work in vivid detail, so the ghostwriter can later write a true post from it. You only ask questions. You never write the post.
 
@@ -105,11 +106,12 @@ ${aboutBlock(ctx)}
 
 How to talk:
 1. One question per message. At most 2 short sentences.
-2. Start with a few words that show you listened, reusing their own words. Then ask.
-3. Ask about one specific past moment, not habits or opinions.
-4. Never add details they didn't give. Ask "What was the room like?", not "Was it a glass room?".
-5. No praise like "Great story!", no summaries, no advice, no lists, no emojis.
-6. Write in ${lang}. Sound like a curious friend, not a form.
+2. You may start with a few of their own words, repeated neutrally. Then ask.
+3. Never judge or praise what they said. No "Great story", "What a moment", "That's powerful", "exactly the proof you needed", "that's a tough spot".
+4. Ask about one specific past moment, not habits or opinions.
+5. Never add details they didn't give. Ask "What was the room like?", not "Was it a glass room?".
+6. No summaries, no advice, no lists, no emojis.
+7. Write in ${lang}. Sound like a curious friend, not a form.
 
 Example:
 ${first}: "We lost our biggest client last spring."
@@ -133,7 +135,8 @@ export function directorNote(ctx: InterviewContext, d: Decision, mode: NoteMode 
   const hello = d.firstMessage ? `This is your first message: greet ${first} in a few words first. ` : "";
   const covered = d.covered.length ? `\nAlready covered: ${d.covered.join(", ")}. Don't ask about those again.` : "";
   const like = d.probe ? `\nAsk something like: ${quote(d.probe.text)}` : "";
-  const react = `Write ONE short sentence reacting to what ${first} just said, reusing their own words. No question. No praise. Nothing else.`;
+  const echo = `a few of ${first}'s own words, repeated neutrally (no praise, no judgement words like great, clear, perfect, right, strong, bold, key)`;
+  const react = `Write ONE short sentence with ${echo}. No question. Nothing else.`;
   const finishStory = `"${FINISH_STORY}"`;
   const finishPos = `"${FINISH_POSITIONING}"`;
   switch (d.stage) {
@@ -147,7 +150,7 @@ export function directorNote(ctx: InterviewContext, d: Decision, mode: NoteMode 
       const el = STORY_ELEMENTS.find((e) => e.key === d.target);
       if (d.generic) return `${hello}Their last answer was general. Ask for the last specific time it actually happened.${like}${covered}`;
       const after = d.missing.filter((m) => m !== el?.label.toLowerCase()).slice(0, 2);
-      return `${hello}Write a few words reacting to their answer, then ONE question to find out ${el?.goal ?? "more about the moment"}.${like}${covered}${
+      return `${hello}You may start with ${echo}. Then ONE question to find out ${el?.goal ?? "more about the moment"}.${like}${covered}${
         after.length ? `\nIf they already told you that, ask about ${after[0]} instead.` : ""
       }`;
     }
@@ -161,7 +164,7 @@ export function directorNote(ctx: InterviewContext, d: Decision, mode: NoteMode 
         : `They shared a photo for this story. Thank them in a few words. Then ask what one line they'd tell a friend about this photo.${like}`;
     case "wrap":
       return mode === "protocol"
-        ? `The story is complete. Write ONE or two short sentences that reflect back the heart of it (the moment and what changed), using ${first}'s words. Only use what ${first} told you. No question, no advice, no praise.`
+        ? `The story is complete. Write ONE or two short sentences that reflect back the heart of it (the moment and what changed), using ${first}'s words. Only use what ${first} told you. No question, no advice, no praise, no judgement.`
         : `This story is complete. In 2 or 3 short sentences: thank ${first} for the story${
             d.photoDeferred ? ", say it's fine to add the photo later and you'll remind them" : ""
           }, and say they can tap ${finishStory} to save it, or tell you about another moment. Don't ask anything else.`;
@@ -169,7 +172,7 @@ export function directorNote(ctx: InterviewContext, d: Decision, mode: NoteMode 
       return `${first} is done. In one short sentence, tell them to tap ${ctx.kind === "positioning" ? finishPos : finishStory} and you'll write it all up. No question.`;
     case "pos-question": {
       const area = POSITIONING_AREAS.find((a) => a.key === d.target);
-      return `${hello}Write a few words reacting to their answer, then ONE question to find out ${area?.goal ?? "more"}.${like}${covered}`;
+      return `${hello}You may start with ${echo}. Then ONE question to find out ${area?.goal ?? "more"}.${like}${covered}`;
     }
     case "pos-example":
       return `Their answer was short. Ask for one concrete example or a number.${like}`;
@@ -400,12 +403,13 @@ Rules:
 6. people: names or roles of the people in it. If they asked to keep someone anonymous, use a role instead of the name.
 7. emotions: feelings they mentioned, one or two words each.
 8. details: concrete details (numbers, objects, sounds, what was on a screen), short phrases.
-9. quotes: up to 4 vivid sentences copied word for word from ${first}'s messages.
-10. lesson: the lesson in their words, one sentence. "" if there was none.
-11. pillar: the name of the best matching pillar${input.pillars.length ? "" : ' (use "")'}.
-12. tags: 3 to 6 lowercase topic words.
-13. angles: 2 or 3 possible post angles, one short line each.
-14. strength: 1 to 5. 5 means a vivid scene, clear stakes, a turning point, specific details and a lesson. 1 means vague.
+9. Numbers and amounts exactly as ${first} wrote them, with digits, in every field. Never add or convert a currency: no $, €, £, dollars or euros unless ${first} used that exact currency for that amount.
+10. quotes: up to 4 vivid sentences copied word for word from ${first}'s messages.
+11. lesson: the lesson in their words, one sentence. "" if there was none.
+12. pillar: the name of the best matching pillar${input.pillars.length ? "" : ' (use "")'}.
+13. tags: 3 to 6 lowercase topic words.
+14. angles: 2 or 3 possible post angles, one short line each.
+15. strength: 1 to 5. 5 means a vivid scene, clear stakes, a turning point, specific details and a lesson. 1 means vague.
 Write the text fields in ${languageName(input.language)}.`;
   return { system, user };
 }
@@ -422,7 +426,7 @@ ${input.transcript}
 
 Fill in ${first}'s LinkedIn strategy from this interview.
 Rules:
-1. Use only what ${first} said. Leave a field empty if it wasn't covered.
+1. Use only what ${first} said in their own messages. Examples listed inside the interviewer's questions are not answers. Leave a field empty if it wasn't covered.
 2. positioning: one sentence like "I help [who] [do what] by [how]", in their words where possible.
 3. goals: what LinkedIn should do for them, short phrases, most important first.
 4. audienceWho: one sentence about the one reader they want most.
@@ -431,10 +435,11 @@ Rules:
 7. offers: what they sell or want to be known for.
 8. beliefs: things they believe about their field, in their words.
 9. contrarianTakes: opinions most peers would dispute.
-10. avoidTopics: topics they said they don't want to post about. Don't invent any.
+10. avoidTopics: only topics ${first} said, in their own words, they don't want to post about. If they named none, use [].
 11. cta: what a reader should do after reading, or "".
 12. postsPerWeek: the number they mentioned, or 0.
 13. notes: tone, humour, words they never use, anything else useful for a ghostwriter. 1 to 3 sentences.
+14. Numbers and amounts exactly as ${first} wrote them. Never add or convert a currency.
 Write the text in ${languageName(input.language)}.`;
   return { system, user };
 }
@@ -454,6 +459,7 @@ Rules:
 3. name: 2 to 4 words.
 4. description: one sentence: what the posts are about and why their readers care.
 5. storyPrompts: 3 questions that ask ${first} about ONE specific past moment for this pillar, like "When did a client last ...? What exactly happened?". Never ask for opinions or habits.
+6. Numbers and amounts exactly as written above. Never add or convert a currency.
 Write in ${languageName(input.language)}.`,
   };
 }

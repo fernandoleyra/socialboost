@@ -96,11 +96,12 @@ export function LinkedInImportTab({ onImported, onUseExport }: { onImported: (r:
           company page. Any app name works.
         </Step>
         <Step n={2}>
-          In the app&apos;s <Name>Products</Name> tab, add <Name>Member Data Portability API (Member)</Name> and accept the terms. Access is granted straight away.
+          In the app&apos;s <Name>Products</Name> tab, click <Name>Request access</Name> next to <Name>Member Data Portability API (Member)</Name> and accept the terms. Access is
+          granted straight away.
         </Step>
         <Step n={3}>
           Open the <Link href={TOKEN_TOOL_URL}>OAuth Token Tool</Link> (Docs and tools → OAuth Token Tools), click <Name>Create token</Name>, pick that app, tick{" "}
-          <code className="break-all rounded bg-fill-3 px-1 py-0.5 text-[13px]">{DMA_SCOPE}</code> and allow access.
+          <code className="break-all rounded bg-fill-3 px-1 py-0.5 text-[13px]">{DMA_SCOPE}</code>, click <Name>Request access token</Name>, sign in and click <Name>Allow</Name>.
         </Step>
         <Step n={4}>Copy the access token, paste it below and import.</Step>
       </ol>

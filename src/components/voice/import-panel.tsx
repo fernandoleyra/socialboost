@@ -48,14 +48,15 @@ function ExportTab({ onParsed }: { onParsed: (r: ParseResult) => void }) {
       <p className="t-subhead text-label-2">Works for every LinkedIn member: LinkedIn&apos;s own copy of your data holds the full text and date of every post you wrote.</p>
       <ol className="space-y-2 t-subhead text-label-2">
         <li>
-          <span className="font-semibold text-label">1.</span> On LinkedIn: <span className="text-label">Me → Settings &amp; Privacy → Data privacy → Get a copy of your data</span>.
+          <span className="font-semibold text-label">1.</span> On LinkedIn, on a computer: <span className="text-label">Me → Settings &amp; Privacy → Data privacy → Download your data</span>{" "}
+          (<span className="text-label">Get a copy of your data</span> in some versions).
         </li>
         <li>
-          <span className="font-semibold text-label">2.</span> Choose <span className="text-label">Want something in particular?</span>, tick <span className="text-label">Posts</span> (called{" "}
-          <span className="text-label">Shares</span> in some versions), and request the archive.
+          <span className="font-semibold text-label">2.</span> Pick the larger archive with everything, or just <span className="text-label">Shares</span> (your posts), then click{" "}
+          <span className="text-label">Request archive</span>.
         </li>
         <li>
-          <span className="font-semibold text-label">3.</span> LinkedIn emails you a download link, usually within a day. The link works for 72 hours.
+          <span className="font-semibold text-label">3.</span> LinkedIn emails you a download link, usually within a day (it can take up to 48 hours). The link works for 72 hours.
         </li>
         <li>
           <span className="font-semibold text-label">4.</span> Unzip the download and drop <span className="text-label">Shares.csv</span> here.

@@ -14,6 +14,7 @@ import type { Critique, LintIssue, Memory, Pillar, Strategy, VoiceStats } from "
 import { HOOK_TYPE_LABELS, HOOK_TYPES, type Angle } from "./angles";
 import { L } from "./labels";
 import { PROMPT_BANNED } from "./lexicon";
+import { alignFigures, currencyFamilies, extractNumbers } from "./numbers";
 import { STRUCTURES, getStructure, type Structure, type StructureId } from "./structures";
 
 export type PromptMemory = Pick<Memory, "title" | "summary" | "story" | "when" | "place" | "people" | "emotions" | "details" | "quotes" | "lesson">;
@@ -98,7 +99,7 @@ export function storyFacts(story: string): string[] {
 export function storyBlock(ctx: PromptContext): string {
   const m = ctx.memory;
   if (!m) return "(No notes for this post. Use only facts that are already in the current post.)";
-  const lines: string[] = [`${L.title} ${m.title}`];
+  const lines: string[] = [`${L.title} ${alignFigures(m.title, ownFacts(ctx))}`];
   if (m.when) lines.push(`${L.when} ${m.when}`);
   if (m.place) lines.push(`${L.where} ${m.place}`);
   if (list(m.people).length) lines.push(`${L.people} ${list(m.people).join(", ")}`);
@@ -113,8 +114,11 @@ export function storyBlock(ctx: PromptContext): string {
   return lines.join("\n");
 }
 
-/** Everything a post may state as fact. Fed to the linter's provenance check. */
-export function factsText(ctx: PromptContext): string {
+/**
+ * The facts in the author's own words: everything but the memory's title and summary, which the
+ * extractor wrote. Numbers, amounts and currencies are checked against this.
+ */
+function ownFacts(ctx: PromptContext): string {
   const m = ctx.memory;
   const s = ctx.strategy;
   return [
@@ -124,8 +128,6 @@ export function factsText(ctx: PromptContext): string {
     ...(s?.expertise ?? []),
     ...(s?.offers ?? []),
     s?.cta,
-    m?.title,
-    m?.summary,
     m?.story,
     m?.when,
     m?.place,
@@ -138,6 +140,18 @@ export function factsText(ctx: PromptContext): string {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+/**
+ * Everything a post may state as fact. Fed to the linter's provenance check. The title and summary
+ * are labels the extractor wrote; their figures are aligned with the author's own words first, so a
+ * "$40k" in a title can't vouch for a currency the story never names.
+ */
+export function factsText(ctx: PromptContext): string {
+  const m = ctx.memory;
+  const own = ownFacts(ctx);
+  const labels = [m?.title, m?.summary].filter((x): x is string => !!x).map((x) => alignFigures(x, own));
+  return [...labels, own].filter(Boolean).join("\n");
 }
 
 function voiceSection(ctx: PromptContext): string {
@@ -172,6 +186,30 @@ function dashRule(stats: VoiceStats | null): string {
   return "Do not use em dashes (—) or en dashes (–). Use a period or a comma instead.";
 }
 
+/**
+ * How long line 1 may be: a bit over the author's usual first line when we know it, else 140
+ * characters (the mobile cut). Always well under the ~210-character desktop fold.
+ */
+export function hookChars(stats: VoiceStats | null): number {
+  if (stats && stats.sampleCount >= 3 && stats.avgHookChars >= 40) return Math.max(60, Math.min(180, Math.round(stats.avgHookChars * 1.15)));
+  return 140;
+}
+
+/**
+ * Figures exactly as the author said them. Small models spell numbers out ("sixty percent") and
+ * add currencies ("40k" → "forty thousand dollars"); the examples come from the notes themselves.
+ */
+function figuresRule(ctx: PromptContext): string {
+  if (!ctx.memory) return "Keep every number, amount and currency exactly as the current post writes it. Never add or convert a currency.";
+  const own = ownFacts(ctx);
+  const examples = [...new Set(extractNumbers(own).filter((n) => !n.small).map((n) => n.raw))].slice(0, 3);
+  const eg = examples.length ? ` (${examples.map((e) => `"${e}"`).join(", ")})` : "";
+  const currency = currencyFamilies(own).size
+    ? "Keep currencies exactly as my notes write them, and never add one to an amount that has none."
+    : 'My notes name no currency, so never add one: no "$", "€", "£", "dollars" or "euros".';
+  return `Write every number with digits, exactly as my notes write it${eg}. Never spell numbers out in words. ${currency}`;
+}
+
 /** Whether a post already has a numbered list (two or more "1." / "2)" lines). */
 export function hasNumberedList(body: string): boolean {
   return (body.match(/^\s*\d{1,2}[.)]\s+\S/gm) ?? []).length >= 2;
@@ -196,8 +234,9 @@ export function writingRules(ctx: PromptContext, structure: Structure | null, op
       ? "Use only facts from my notes. Do not invent names, numbers, dates, places, quotes or events. If a detail is missing, leave it out."
       : "Use only facts that are already in the current post. Do not invent names, numbers, dates, places, quotes or events.",
     ctx.memory ? "Retell the story in new sentences. Do not copy whole sentences from my notes, and never repeat the note labels." : "Keep my wording wherever it already works.",
+    figuresRule(ctx),
     `Write as me, ${firstName(ctx.author.name)}, in first person ("I"). Sound like I talk, not like a press release.`,
-    "The first line is the hook: one concrete sentence under 140 characters with a real detail (a time, a place, a number or exact words). Do not open with a question.",
+    `The first line is the hook: one concrete sentence under ${hookChars(s)} characters with a real detail (a time, a place, a number or exact words), alone on its line with a blank line after it. Do not open with a question.`,
     "Paragraphs of 1 to 3 sentences with one blank line between them. Mix short and long sentences. Never more than 3 one-line paragraphs in a row.",
     formattingRule(structure, !!opts.keepList),
     `${emojiRule(s)} ${hashtagRule(s)}`,
@@ -377,7 +416,8 @@ export function revisePrompt(ctx: PromptContext, body: string, changes: string[]
     L.changes,
     numbered(changes),
     "",
-    "Keep everything else that already works: the facts, my voice, the shape.",
+    "Keep everything else that already works: the facts, the numbers exactly as written, my voice, the shape.",
+    `Keep the line breaks: the same paragraphs, one blank line between them, unless a change above asks to join or split paragraphs. Line 1 stays alone on its line: one short sentence under ${hookChars(ctx.stats)} characters, then a blank line. Never join it with the next paragraph.`,
     "",
     L.voice,
     voiceSection(ctx),
@@ -390,9 +430,37 @@ export function revisePrompt(ctx: PromptContext, body: string, changes: string[]
   return { system: writerSystem(ctx), messages: [...contextTurns(ctx, 2, 900), { role: "user", content: task.join("\n") }] };
 }
 
+/**
+ * One targeted pass when a rewrite left an opening line too long to split at a sentence break:
+ * only that line goes to the model, which makes it quick on a small local model.
+ */
+export function openingPrompt(ctx: PromptContext, line: string): Prompt {
+  const target = hookChars(ctx.stats);
+  const task = [
+    "This is the first paragraph of my LinkedIn post. It is too long to work as the first line:",
+    L.postOpen,
+    line.trim(),
+    L.postClose,
+    "",
+    "Rewrite it as:",
+    numbered([
+      `Line 1: one short sentence under ${target} characters, with a concrete detail from the paragraph (a time, a place, a number or exact words).`,
+      "A blank line.",
+      "The rest of the paragraph, in my words.",
+    ]),
+    "",
+    `Keep every fact and every number exactly as written. Add nothing. Write in ${languageName(ctx.language)}.`,
+    "Output only the rewritten paragraph.",
+  ];
+  return { system: writerSystem(ctx), messages: [{ role: "user", content: task.join("\n") }] };
+}
+
+/** A lint finding, with the replacement the linter could work out from the story. */
+type LintFinding = LintIssue & { suggest?: string };
+
 /** Turn lint findings into concrete edit instructions for the writer. Info-level hits are skipped. */
-export function instructionsFromLint(issues: LintIssue[]): string[] {
-  const by = new Map<string, LintIssue[]>();
+export function instructionsFromLint(issues: LintFinding[]): string[] {
+  const by = new Map<string, LintFinding[]>();
   for (const i of issues) {
     if (i.severity === "info") continue;
     by.set(i.rule, [...(by.get(i.rule) ?? []), i]);
@@ -423,6 +491,15 @@ export function instructionsFromLint(issues: LintIssue[]): string[] {
   if (by.has("generic-cta") || by.has("engagement-bait")) out.push("Replace the closing line with a specific question tied to the story, or end on the last concrete detail. No bait.");
   if (by.has("unverified-number")) out.push(`These numbers are not in my notes. Remove them or use the real ones from my notes: ${quote(by.get("unverified-number")!)}.`);
   if (by.has("unverified-quote")) out.push(`Remove quotes that are not word for word in my notes: ${quote(by.get("unverified-quote")!, 3)}.`);
+  if (by.has("invented-currency")) {
+    const hits = by.get("invented-currency")!;
+    const amounts = [...new Set(hits.map((h) => h.suggest).filter(Boolean))].map((a) => `"${a}"`);
+    out.push(`My notes don't use ${quote(hits)} for these amounts. Remove the currency and write each amount exactly as my notes do${amounts.length ? ` (${amounts.join(", ")})` : ""}.`);
+  }
+  if (by.has("number-words")) {
+    const pairs = by.get("number-words")!.filter((h) => h.match && h.suggest).map((h) => `"${h.match}" → "${h.suggest}"`);
+    out.push(`Write these numbers with digits, exactly as my notes do: ${[...new Set(pairs)].join(", ")}.`);
+  }
   if (by.has("mentions")) out.push("Tag only the people who are in the story.");
   return out;
 }
@@ -466,7 +543,7 @@ export function critiquePrompt(ctx: PromptContext, body: string, lint: LintIssue
     "Be strict: a typical LinkedIn post scores 5. Give 8 or more only when it is genuinely good. Lower humanness by 1 for each automatic check above.",
     "If the draft mostly repeats the notes sentence by sentence, without a short hook and a clear shape, give hook and humanness 4 or less.",
     'issues: up to 5 problems. Quote the exact words in quotes, then say what is wrong. Numbers and quotes were already checked automatically; write Invented: "<the words>" only for a fact that is clearly not in the notes.',
-    'suggestions: up to 4 specific edits, one sentence each, saying what to change and how, e.g. Replace "a lot of money" with the real amount from the notes. Every edit must make the post plainer, more specific or more like the author. Never suggest more formal or more polished wording.',
+    'suggestions: up to 4 specific edits, one sentence each, saying what to change and how, e.g. Replace "a lot of money" with the real amount from the notes. Every edit must make the post plainer, more specific or more like the author. Never suggest more formal or more polished wording. Quote numbers and amounts exactly as the notes write them, never with a currency the notes don\'t name.',
   );
   return {
     system: "You are a strict LinkedIn editor. You check a ghostwritten draft against the real notes and the author's voice. You are honest, specific and brief.",

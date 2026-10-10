@@ -219,6 +219,38 @@ describe("lintPost", () => {
     expect(issues.filter((i) => i.rule === "unverified-number")).toEqual([]);
   });
 
+  it("flags the figures a 4B writer changed in a real run", () => {
+    const facts = "Turning down a 40k rebrand\nLast March a founder asked us for a full rebrand. 40k budget. We found that 60% of revenue came from 4 products. Sales went up 23% in two months. We were turning down 40k of work.";
+    const draft = `I felt scared, honestly, because we were turning down forty thousand dollars of work.
+
+We found out sixty percent of revenue came from just four products. Sales went up twenty-three percent in two months.
+
+Should we spend $40k on a new logo or fix what sells?`;
+    const issues = lintPost(draft, null, { facts }).issues;
+    const byRule = (rule: string) => issues.filter((i) => i.rule === rule).map((i) => [i.match, (i as { suggest?: string }).suggest]);
+    expect(byRule("invented-currency")).toEqual([
+      ["dollars", "40k"],
+      ["$", "40k"],
+    ]);
+    expect(issues.find((i) => i.rule === "invented-currency")!.severity).toBe("error");
+    expect(byRule("number-words")).toEqual([
+      ["forty thousand", "40k"],
+      ["sixty percent", "60%"],
+      ["four", "4"],
+      ["twenty-three percent", "23%"],
+    ]);
+    // Spelled out, but real: no "unverified" noise on top of the digits hint.
+    expect(byRule("unverified-number")).toEqual([]);
+  });
+
+  it("checks spelled-out numbers against the story and accepts currencies it names", () => {
+    const issues = lintPost("We refunded €84k to three hundred and twelve customers.", null, { facts: "We refunded 84,000 euros in one afternoon." }).issues;
+    expect(issues.filter((i) => i.rule === "unverified-number").map((i) => i.match)).toEqual(["three hundred and twelve"]);
+    expect(issues.filter((i) => i.rule === "invented-currency")).toEqual([]);
+    const added = lintPost("The sprint costs 18k and the rebrand was 40k euros.", null, { facts: "40k budget. The sprint is around 18k euros." }).issues;
+    expect(added.filter((i) => i.rule === "invented-currency").map((i) => [i.match, i.severity])).toEqual([["euros", "warn"]]);
+  });
+
   it("sorts errors first", () => {
     const sev = lintPost("Let's dive in. We will leverage it. Two  spaces.").issues.map((i) => i.severity);
     expect(sev).toEqual([...sev].sort((a, b) => ["error", "warn", "info"].indexOf(a) - ["error", "warn", "info"].indexOf(b)));

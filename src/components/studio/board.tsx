@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { CalendarDays, CheckCircle2, MessageSquare, Plus, Sparkles, ThumbsUp, AlertTriangle } from "lucide-react";
 import { Chip, EmptyState, Segmented, cx } from "@/components/ui";
-import { publishingSince } from "@/lib/calendar/linkedin-format";
+import { VERIFY_MESSAGE, publishingSince } from "@/lib/calendar/linkedin-format";
 import { BOARD_COLUMNS } from "@/lib/factory/status";
 import type { PostStatus } from "@/lib/types";
 import { MissingPhotoTile, NeedsPhotoChip, PillarChip, ScoreRing, StatusChip, When, photoSrc, type PillarLite } from "./shared";
@@ -64,9 +64,9 @@ function PostCard({ item }: { item: BoardItem }) {
             </Chip>
           )}
           {item.error && item.status !== "published" && (
-            <Chip tone={publishingSince(item.error) ? "blue" : "red"}>
+            <Chip tone={publishingSince(item.error) ? "blue" : item.error === VERIFY_MESSAGE ? "yellow" : "red"}>
               <AlertTriangle className="size-3" />
-              {publishingSince(item.error) ? "Publishing" : "Publish failed"}
+              {publishingSince(item.error) ? "Publishing" : item.error === VERIFY_MESSAGE ? "Check LinkedIn" : "Publish failed"}
             </Chip>
           )}
         </div>

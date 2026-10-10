@@ -5,6 +5,7 @@ import { HttpError } from "./http";
 import { LLMError, chatJson, cosine, embed } from "./llm";
 import { createMemory, getMemory, getStrategy, getProfile, listMemories, listPosts, memoryEmbeddingText, updateMemory, updatePhoto, getPhoto } from "./repo";
 import type { Memory, Pillar, Post } from "./types";
+import { parseAngleField } from "./factory/angles";
 import {
   blendScore,
   cleanList,
@@ -179,7 +180,8 @@ export function memoryPosts(profileId: string, memoryId: string): MemoryPostRef[
     publishedAt: p.publishedAt,
     linkedinUrl: p.linkedinUrl,
     updatedAt: p.updatedAt,
-    hook: p.body.split("\n").map((l) => l.trim()).find(Boolean) ?? "",
+    // Planned ideas have no text yet: show the hook of the angle chosen in the Studio (posts.angle JSON).
+    hook: p.body.split("\n").map((l) => l.trim()).find(Boolean) || parseAngleField(p.angle).selected?.hook || "",
   }));
 }
 

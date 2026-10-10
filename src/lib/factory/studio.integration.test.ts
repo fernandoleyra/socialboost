@@ -33,6 +33,9 @@ const ctx = (id: string) => ({ params: Promise.resolve({ id }) });
 const DRAFT =
   "Sure! Here's your LinkedIn post:\n\nHook: At 7:40 in the Basel office, our biggest client said \"Did you check the proxy?\"\n\nWe had spent 3 days on the bug. I had told the team it was the database.\n\nIt took 20 minutes once we looked at the proxy. I stopped guessing in front of clients after that.\n\nClose: When did a client spot the fix before you did?\n\nLet me know if you'd like any changes!";
 const REVISED = "At 7:40 in the Basel office, our client asked one question.\n\n\"Did you check the proxy?\"\n\n3 days of debugging, fixed in 20 minutes.";
+/** A small model's rewrite: hook glued to the next paragraph, numbers spelled out. */
+const GLUED =
+  "At 7:40 in the Basel office our biggest client asked one question. We had spent three days on the bug and I had told the whole team it was the database, so I walked into that room sure we were about to lose the account.\n\nIt took twenty minutes once we looked at the proxy.\n\nWhen did a client spot the fix before you did?";
 
 const calls: { system: string; format: boolean; stream: boolean }[] = [];
 
@@ -54,11 +57,14 @@ function ollamaStub() {
         ],
       });
     } else if (/strict LinkedIn editor/.test(system)) {
-      // Small models sometimes score outside 1-10.
-      content = JSON.stringify({ humanness: 0, specificity: 11, voiceMatch: 7.4, hook: 8, issues: [], suggestions: ["Name the client's team."] });
+      const draft = /<post>([\s\S]*?)<\/post>/.exec(body.messages[body.messages.length - 1].content)?.[1] ?? "";
+      // Small models sometimes score outside 1-10. The short rewrite scores worse than the draft.
+      content = draft.includes("fixed in 20 minutes")
+        ? JSON.stringify({ humanness: 1, specificity: 1, voiceMatch: 1, hook: 1, issues: [], suggestions: [] })
+        : JSON.stringify({ humanness: 0, specificity: 11, voiceMatch: 7.4, hook: 8, issues: [], suggestions: ["Name the client's team."] });
     } else {
       const task = body.messages[body.messages.length - 1].content;
-      content = task.includes("Here is the current post:") ? REVISED : DRAFT;
+      content = task.includes("Glue the opening") ? GLUED : task.includes("Here is the current post:") ? REVISED : DRAFT;
     }
     if (!body.stream) return Response.json({ message: { role: "assistant", content }, done: true });
     const pieces = content.match(/[\s\S]{1,24}/g) ?? [];
@@ -205,13 +211,28 @@ describe("studio flow", () => {
     expect(repo.listPostVersions(postId)[0].body).toBe("At 7:40 in the Basel office our biggest client asked one question.");
   });
 
-  it("runs autopilot end to end for a planned idea", async () => {
+  it("keeps line 1 short and the story's figures when a rewrite glues the opening", async () => {
+    await readStream(await reviseRoute.POST(req("POST", "/api/studio/revise", { postId, instruction: "Glue the opening into one paragraph." })));
+    const body = repo.getPost(postId)!.body;
+    const lines = body.split("\n");
+    expect(lines[0]).toBe("At 7:40 in the Basel office our biggest client asked one question.");
+    expect(lines[1]).toBe("");
+    expect(body).toContain("We had spent 3 days on the bug");
+    expect(body).toContain("It took 20 minutes");
+    expect(repo.getPost(postId)!.quality?.lint.some((i) => ["hook-length", "number-words", "unverified-number"].includes(i.rule))).toBe(false);
+  });
+
+  it("runs autopilot end to end for a planned idea, keeping the better-scoring version", async () => {
     const { post: idea } = await (await postsRoute.POST(req("POST", "/api/posts", { memoryId }))).json();
     const res = await autopilotRoute.POST(req("POST", "/api/studio/autopilot", { postId: idea.id }));
     expect(res.status).toBe(200);
     const { post, steps } = await res.json();
-    expect(steps.slice(0, 3)).toEqual(["angles", "draft", "critique"]);
-    expect(post.body).toBeTruthy();
+    expect(steps).toEqual(["angles", "draft", "critique", "revise", "critique", "keep-draft"]);
+    expect(post.body.startsWith("At 7:40 in the Basel office")).toBe(true);
+    expect(post.body).not.toBe(REVISED);
+    expect(post.quality.critique.humanness).toBe(1);
+    expect(post.quality.critique.specificity).toBe(10);
+    expect(repo.listPostVersions(idea.id)[0].note).toMatch(/^Kept the first draft/);
     expect(["draft", "review"]).toContain(post.status);
     // A second run doesn't silently overwrite the draft.
     expect((await autopilotRoute.POST(req("POST", "/api/studio/autopilot", { postId: idea.id }))).status).toBe(409);
