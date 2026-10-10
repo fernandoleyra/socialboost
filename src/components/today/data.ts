@@ -13,7 +13,7 @@ import {
   type DashboardSnapshot,
 } from "@/lib/dashboard";
 import { getStrategy, getVoiceProfile, listActivity, listInterviews, listMemories, listPosts, listVoiceSamples, type Profile } from "@/lib/repo";
-import { isStrategyEmpty, pillarIdOf } from "@/components/strategy/model";
+import { isStrategyEmpty, pillarIdOf } from "@/lib/strategy";
 
 export type ActivityItem = { id: number; kind: string; message: string; href: string | null; at: string };
 
@@ -102,7 +102,9 @@ export type DashboardView = ReturnType<typeof loadDashboard>;
 function activityHref(kind: string, refId: string | null): string | null {
   const k = kind.toLowerCase();
   if (k.startsWith("memory")) return refId ? `/memories?open=${encodeURIComponent(refId)}` : "/memories";
-  if (k.startsWith("photo")) return "/photos";
+  // Photo entries point at the story the photo was added to.
+  if (k.startsWith("photo")) return refId ? `/memories?open=${encodeURIComponent(refId)}` : "/photos";
+  if (k.startsWith("linkedin")) return "/settings/linkedin";
   if (k.startsWith("voice")) return "/voice";
   if (k.startsWith("strategy")) return "/strategy";
   if (k.startsWith("profile")) return "/settings";

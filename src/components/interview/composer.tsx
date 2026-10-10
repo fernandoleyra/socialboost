@@ -4,7 +4,8 @@ import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type 
 import { ArrowUp, ImagePlus, Loader2, Mic, Square, X, AlertTriangle } from "lucide-react";
 import { cx, toast } from "@/components/ui";
 import type { Photo } from "@/lib/types";
-import { PHOTO_ACCEPT, imageFiles, uploadPhoto } from "./upload";
+import { imageFilesFrom, uploadPhoto } from "@/components/photos/upload";
+import { ACCEPT_ATTR } from "@/lib/photo-core";
 import { useDictation } from "./use-dictation";
 
 type Attachment = { key: string; preview: string; progress: number; photo?: Photo; error?: string };
@@ -124,12 +125,12 @@ export function Composer({
   const onDrop = (e: DragEvent) => {
     e.preventDefault();
     setDragging(false);
-    if (!disabled) addFiles(imageFiles(e.dataTransfer.files));
+    if (!disabled) addFiles(imageFilesFrom(e.dataTransfer.files));
   };
 
   const onPaste = (e: ClipboardEvent) => {
     if (!allowPhotos) return;
-    const files = imageFiles(Array.from(e.clipboardData.files));
+    const files = imageFilesFrom(Array.from(e.clipboardData.files));
     if (files.length) {
       e.preventDefault();
       addFiles(files);
@@ -212,11 +213,11 @@ export function Composer({
             <input
               ref={fileInput}
               type="file"
-              accept={PHOTO_ACCEPT}
+              accept={ACCEPT_ATTR}
               multiple
               hidden
               onChange={(e) => {
-                addFiles(imageFiles(e.target.files));
+                addFiles(imageFilesFrom(e.target.files));
                 e.target.value = "";
               }}
             />

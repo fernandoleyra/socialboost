@@ -5,7 +5,8 @@ import { Camera, Clock, Lightbulb, Loader2 } from "lucide-react";
 import { Button, cx, toast } from "@/components/ui";
 import { PHOTO_TIPS } from "@/lib/interview/bank";
 import type { Photo } from "@/lib/types";
-import { PHOTO_ACCEPT, imageFiles, uploadPhoto } from "./upload";
+import { imageFilesFrom, uploadPhoto } from "@/components/photos/upload";
+import { ACCEPT_ATTR } from "@/lib/photo-core";
 
 /**
  * Drag-and-drop / click-to-pick photo zone. Uploads every picked file to the Photos module
@@ -59,7 +60,7 @@ export function PhotoDrop({
   const onDrop = (e: DragEvent) => {
     e.preventDefault();
     setDragging(false);
-    if (!disabled) void upload(imageFiles(e.dataTransfer.files));
+    if (!disabled) void upload(imageFilesFrom(e.dataTransfer.files));
   };
 
   const busy = progress !== null;
@@ -98,11 +99,11 @@ export function PhotoDrop({
       <input
         ref={input}
         type="file"
-        accept={PHOTO_ACCEPT}
+        accept={ACCEPT_ATTR}
         multiple
         hidden
         onChange={(e) => {
-          void upload(imageFiles(e.target.files));
+          void upload(imageFilesFrom(e.target.files));
           e.target.value = "";
         }}
       />

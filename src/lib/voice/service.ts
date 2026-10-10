@@ -17,7 +17,8 @@ import {
 } from "@/lib/repo";
 import { getRoute, getSetting, setSetting } from "@/lib/settings";
 import { VoiceGuideSchema, type VoiceProfile } from "@/lib/types";
-import { ImportFormatError, parseImport, type ParsedPost } from "./parse";
+import { DmaError, cleanToken, fetchShareSnapshot, type FetchLike } from "./dma";
+import { ImportFormatError, parseImport, parseShareRecords, type ParseResult, type ParsedPost } from "./parse";
 import { ANALYSIS_SYSTEM, analysisBudget, buildAnalysisPrompt, buildVoicePromptBlock, groundGuide, reconcileGuide, sanitizeGuide } from "./prompts";
 import { selectForAnalysis } from "./rank";
 import { computeVoiceExtras, computeVoiceStats } from "./stylometry";
@@ -26,6 +27,7 @@ import {
   type ImportOrigin,
   type ImportRequest,
   type ImportResult,
+  type LinkedInImportResult,
   type ProfileUpdate,
   type SampleUpdate,
   type VoiceExtras,
@@ -183,35 +185,30 @@ export function indexInBackground(profileId: string) {
 const NOTHING_FOUND_HINT: Record<ImportRequest["format"], string> = {
   text: "Paste the full text of at least one post (40+ characters). Separate posts with a line of three dashes (---).",
   csv: "Open Shares.csv from your LinkedIn export. If it only has reposts, there's nothing in your own words to learn from yet.",
-  json: "Run the browser helper on your own activity page, click Copy posts, and paste the result here.",
+  json: 'Send a list of posts with their full text, for example [{"text": "…"}].',
 };
 
-export async function importVoice(profile: Profile, req: ImportRequest): Promise<ImportResult> {
-  const headerLines = req.kind === "own" ? [profile.name, profile.headline] : req.author ? [req.author] : [];
-  const origin: ImportOrigin = req.origin ?? (req.format === "csv" ? "export" : req.format === "json" ? "helper" : "paste");
-  let parsed;
-  try {
-    // The import preview sends Shares.csv posts back as JSON; their text has no LinkedIn UI to strip.
-    parsed = parseImport(req.format, req.content, { headerLines, clean: !(req.format === "json" && origin === "export") });
-  } catch (err) {
-    if (err instanceof ImportFormatError) throw new HttpError(400, err.message, err.hint);
-    throw err;
-  }
-  if (parsed.posts.length === 0) throw new HttpError(400, "We couldn't find any posts in that.", NOTHING_FOUND_HINT[req.format]);
+const NO_METRICS_WARNING = "LinkedIn doesn't include reactions or comments with your posts. Add the numbers to your best posts below so the writer learns from those first.";
 
+/**
+ * Save parsed posts: skip what's already there (filling in numbers it was missing), then for own
+ * posts recompute the fingerprint and index the new ones for example retrieval in the background.
+ */
+function saveImport(profile: Profile, parsed: ParseResult, opts: { kind: ImportRequest["kind"]; author?: string; origin: ImportOrigin }): ImportResult {
+  const { kind, author, origin } = opts;
   const existing = existingByHash(profile.id);
   let updated = 0;
   const fresh: Parameters<typeof insertVoiceSamples>[1] = [];
   for (const p of parsed.posts) {
     const row = existing.get(hashText(p.text));
     if (row) {
-      if (row.kind === req.kind && mergeInto(row, p)) updated++;
+      if (row.kind === kind && mergeInto(row, p)) updated++;
       continue;
     }
     fresh.push({
       text: p.text,
-      kind: req.kind,
-      author: req.kind === "reference" ? req.author : "",
+      kind,
+      author: kind === "reference" ? author : "",
       url: p.url ?? "",
       postedAt: p.postedAt ?? null,
       impressions: p.impressions ?? null,
@@ -225,19 +222,77 @@ export async function importVoice(profile: Profile, req: ImportRequest): Promise
   const skipped = parsed.skipped + (parsed.posts.length - inserted - updated);
 
   const warnings = [...parsed.warnings];
-  if (req.kind === "own") {
+  if (kind === "own") {
     refreshStats(profile.id);
     // Index the new posts for example retrieval without making the person wait.
     if (inserted > 0) indexInBackground(profile.id);
-    if (origin === "export" && inserted > 0) {
-      warnings.push("LinkedIn's export has no reactions or comments. Add the numbers to your best posts below so the writer learns from those first.");
-    }
+    if ((origin === "export" || origin === "linkedin") && inserted > 0) warnings.push(NO_METRICS_WARNING);
   }
   if (inserted > 0) {
-    const what = req.kind === "own" ? (inserted === 1 ? "1 of your posts" : `${inserted} of your posts`) : `${inserted} ${inserted === 1 ? "post" : "posts"} by ${req.author}`;
-    logActivity("voice", `Imported ${what}`, { profileId: profile.id });
+    const what = kind === "own" ? (inserted === 1 ? "1 of your posts" : `${inserted} of your posts`) : `${inserted} ${inserted === 1 ? "post" : "posts"} by ${author}`;
+    logActivity("voice", `Imported ${what}${origin === "linkedin" ? " from LinkedIn" : ""}`, { profileId: profile.id });
   }
   return { found: parsed.posts.length, inserted, updated, skipped, warnings, state: getVoiceState(profile.id) };
+}
+
+export async function importVoice(profile: Profile, req: ImportRequest): Promise<ImportResult> {
+  const headerLines = req.kind === "own" ? [profile.name, profile.headline] : req.author ? [req.author] : [];
+  const origin: ImportOrigin = req.origin ?? (req.format === "csv" ? "export" : "paste");
+  let parsed: ParseResult;
+  try {
+    // The import preview sends Shares.csv posts back as JSON; their text has no LinkedIn UI to strip.
+    parsed = parseImport(req.format, req.content, { headerLines, clean: !(req.format === "json" && origin !== "paste") });
+  } catch (err) {
+    if (err instanceof ImportFormatError) throw new HttpError(400, err.message, err.hint);
+    throw err;
+  }
+  if (parsed.posts.length === 0) throw new HttpError(400, "We couldn't find any posts in that.", NOTHING_FOUND_HINT[req.format]);
+  return saveImport(profile, parsed, { kind: req.kind, author: req.author, origin });
+}
+
+/**
+ * Pull the person's own posts from LinkedIn's Member Data Portability API (EEA and Switzerland
+ * members only). The token is used for these requests and nothing else: not stored, not logged.
+ */
+export async function importFromLinkedIn(
+  profile: Profile,
+  rawToken: string,
+  opts: { signal?: AbortSignal; fetch?: FetchLike } = {},
+): Promise<LinkedInImportResult> {
+  const token = cleanToken(rawToken);
+  if (!token) throw new HttpError(400, "Paste your LinkedIn access token first.");
+  let snapshot;
+  try {
+    snapshot = await fetchShareSnapshot(token, { signal: opts.signal, fetch: opts.fetch });
+  } catch (err) {
+    if (err instanceof DmaError) throw new HttpError(err.status, err.message, err.hint);
+    throw err;
+  }
+  if (snapshot.rows.length === 0) {
+    throw new HttpError(
+      404,
+      "LinkedIn hasn't sent any posts yet.",
+      "LinkedIn gathers your data after you first allow access, and posts can take a day or two. Try again later with the same token. If you've never posted, there's nothing to import.",
+    );
+  }
+  let parsed: ParseResult;
+  try {
+    parsed = parseShareRecords(snapshot.rows);
+  } catch (err) {
+    if (err instanceof ImportFormatError) throw new HttpError(502, err.message, err.hint);
+    throw err;
+  }
+  if (parsed.posts.length === 0) {
+    throw new HttpError(422, "The posts LinkedIn sent are too short to learn from.", "A post needs at least 40 characters and a few words. Paste longer posts you wrote elsewhere instead.");
+  }
+  const result = saveImport(profile, parsed, { kind: "own", origin: "linkedin" });
+  if (snapshot.interrupted) {
+    result.warnings.push(
+      `Got ${snapshot.pages} ${snapshot.pages === 1 ? "page" : "pages"} of posts, then LinkedIn stopped answering: ${snapshot.interrupted.message} Import again later for the rest; posts you already have are skipped.`,
+    );
+  }
+  if (snapshot.capped) result.warnings.push(`We stopped after ${snapshot.pages} pages from LinkedIn. If posts are missing, upload Shares.csv from the data export as well.`);
+  return { ...result, pages: snapshot.pages };
 }
 
 /* ------------------------------------------------------------------ */

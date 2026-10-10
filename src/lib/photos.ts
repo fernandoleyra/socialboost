@@ -5,7 +5,7 @@ import sharp from "sharp";
 import { UPLOAD_DIR, getDb, newId, logActivity, nowIso } from "./db";
 import { HttpError } from "./http";
 import { LLMError, chatJson } from "./llm";
-import { deletePhotoRow, getMemory, getPhoto, insertPhoto, listPhotos, updatePhoto } from "./repo";
+import { deletePhotoRow, getMemory, getPhoto, insertPhoto, listPhotos, listPosts, updatePhoto, updatePost } from "./repo";
 import type { Photo } from "./types";
 import {
   FULL_MAX_EDGE,
@@ -206,7 +206,10 @@ export async function processUpload(profileId: string, file: File, opts: { memor
       userNote: (opts.note ?? "").trim().slice(0, 1000),
       isCandid: null,
     });
-    if (memory) logActivity("photo", `Added a photo to “${memory.title}”`, { profileId, refId: memory.id });
+    if (memory) {
+      if (!memory.photoCount) giveFirstPhotoToPosts(profileId, memory.id, photo.id);
+      logActivity("photo", `Added a photo to “${memory.title}”`, { profileId, refId: memory.id });
+    }
     return photo;
   } catch (err) {
     for (const f of written) fs.rmSync(f, { force: true });
@@ -235,10 +238,8 @@ export function deleteProfilePhotos(profileId: string): number {
 /* ------------------------------------------------------------------ */
 
 export function editPhoto(photo: Photo, patch: { memoryId?: string | null; caption?: string; userNote?: string; isCandid?: boolean | null }): Photo {
-  if (patch.memoryId) {
-    const memory = getMemory(patch.memoryId);
-    if (!memory || memory.profileId !== photo.profileId) throw new HttpError(404, "That story no longer exists.");
-  }
+  const target = patch.memoryId ? getMemory(patch.memoryId) : null;
+  if (patch.memoryId && (!target || target.profileId !== photo.profileId)) throw new HttpError(404, "That story no longer exists.");
   const next = updatePhoto(photo.id, {
     ...(patch.memoryId !== undefined ? { memoryId: patch.memoryId } : {}),
     ...(patch.caption !== undefined ? { caption: patch.caption.trim() } : {}),
@@ -251,11 +252,22 @@ export function editPhoto(photo: Photo, patch: { memoryId?: string | null; capti
       ...(patch.isCandid !== undefined ? { candidSource: "user" } : {}),
     });
   }
-  if (patch.memoryId && patch.memoryId !== photo.memoryId) {
-    const memory = getMemory(patch.memoryId);
-    if (memory) logActivity("photo", `Added a photo to “${memory.title}”`, { profileId: photo.profileId, refId: memory.id });
+  if (target && target.id !== photo.memoryId) {
+    if (!target.photoCount) giveFirstPhotoToPosts(photo.profileId, target.id, photo.id);
+    logActivity("photo", `Added a photo to “${target.title}”`, { profileId: photo.profileId, refId: target.id });
   }
   return next;
+}
+
+/**
+ * A story's first photo also goes on its posts that are still being written and have none: an
+ * Auto-plan idea or a draft started before the photo existed. Approved and scheduled posts keep
+ * what the person approved.
+ */
+function giveFirstPhotoToPosts(profileId: string, memoryId: string, photoId: string) {
+  for (const post of listPosts(profileId, { memoryId, status: ["idea", "draft", "review"] })) {
+    if (!post.photoId) updatePost(post.id, { photoId });
+  }
 }
 
 /* ------------------------------------------------------------------ */

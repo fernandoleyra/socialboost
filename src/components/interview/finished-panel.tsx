@@ -6,7 +6,7 @@ import { Chip, cx } from "@/components/ui";
 import type { InterviewView } from "@/lib/interview/types";
 import type { Memory } from "@/lib/types";
 import { PhotoDrop } from "./photo-drop";
-import { photoUrl } from "./upload";
+import { photoUrl } from "@/components/photos/upload";
 
 function StrengthDots({ value }: { value: number }) {
   return (

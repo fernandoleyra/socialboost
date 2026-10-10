@@ -6,7 +6,7 @@ import { ImportRequestSchema } from "@/lib/voice/types";
 export const dynamic = "force-dynamic";
 
 /**
- * POST /api/voice/import { kind: "own" | "reference", format: "text" | "csv" | "json", content, author?, origin? }
+ * POST /api/voice/import { kind: "own" | "reference", format: "text" | "csv" | "json", content, author?, origin?: "paste" | "export" | "linkedin" }
  * → { found, inserted, updated, skipped, warnings, state }
  */
 export const POST = handle(async (req: Request) => {

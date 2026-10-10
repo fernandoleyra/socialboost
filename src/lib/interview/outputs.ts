@@ -3,12 +3,10 @@
  * checks) and positioning extract → Strategy (merged with what the user already has).
  * Pure and unit-tested.
  */
+import { PILLAR_COLORS, normalizeStrategy } from "@/lib/strategy";
 import { StrategySchema, type ExtractedMemory, type Pillar, type Strategy } from "@/lib/types";
 import type { PositioningExtract, StoryCard, ExtractedPillar } from "./schemas";
 import { keepVerbatimQuotes } from "./text";
-
-/** Same palette as the UI's TONE_NAMES (duplicated: that module is client-only). */
-export const PILLAR_COLORS = ["blue", "purple", "orange", "green", "pink", "teal", "indigo", "mint", "cyan", "yellow", "red"] as const;
 
 const clean = (s: string | null | undefined) => (s ?? "").replace(/\s+/g, " ").trim();
 const cleanBlock = (s: string | null | undefined) => (s ?? "").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
@@ -18,7 +16,8 @@ export function tidyList(items: (string | null | undefined)[], max = 12): string
   const seen = new Set<string>();
   const out: string[] = [];
   for (const raw of items) {
-    const v = clean(raw).replace(/^[-•*\d.)\s]+/, "");
+    // Strip list markers ("- ", "• ", "1. ", "2) ") but never a leading number: "40,000 francs" stays.
+    const v = clean(raw).replace(/^(?:[-–•*]\s+|\d{1,3}[.)]\s+)/, "");
     if (!v) continue;
     const k = v.toLowerCase();
     if (seen.has(k)) continue;
@@ -186,7 +185,8 @@ export function mergeStrategy(existing: Strategy | null, x: PositioningExtract, 
   };
 
   const pick = (incoming: string, current: string) => clean(incoming) || current;
-  const union = (current: string[], incoming: string[], max = 12) => tidyList([...current, ...incoming], max);
+  // The cap limits what the interview adds; it never trims a list the person already wrote.
+  const union = (current: string[], incoming: string[], max = 12) => tidyList([...current, ...incoming], Math.max(max, current.length));
 
   const ppw = Math.round(x.postsPerWeek || 0);
   const cadenceUntouched = !existing;
@@ -196,7 +196,8 @@ export function mergeStrategy(existing: Strategy | null, x: PositioningExtract, 
       : base.cadence;
 
   const notes = clean(x.notes);
-  return StrategySchema.parse({
+  // Same normalization as PUT /api/strategy, so the editor, Calendar and Insights get valid pillar ids and colors.
+  return normalizeStrategy(StrategySchema.parse({
     ...base,
     positioning: pick(x.positioning, base.positioning),
     goals: union(base.goals, x.goals, 8),
@@ -215,7 +216,7 @@ export function mergeStrategy(existing: Strategy | null, x: PositioningExtract, 
     cadence,
     language: base.language || opts.language,
     notes: notes && !base.notes.includes(notes) ? [base.notes, notes].filter(Boolean).join("\n") : base.notes,
-  });
+  }));
 }
 
 /** Plain-text summary of an extract, used to retry pillar generation on its own. */

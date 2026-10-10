@@ -10,7 +10,7 @@ import { AutoTextarea } from "./auto-textarea";
 import { CadenceEditor } from "./cadence-editor";
 import { ListEditor } from "./list-editor";
 import { PillarCard } from "./pillar-card";
-import { GOAL_SUGGESTIONS, MAX_PILLARS, balanceWeights, cadenceSummary, createPillar, emptyStrategy, isStrategyEmpty, sharePercents } from "./model";
+import { GOAL_SUGGESTIONS, MAX_PILLARS, balanceWeights, cadenceSummary, createPillar, emptyStrategy, isStrategyEmpty, sharePercents } from "@/lib/strategy";
 import { useAutosave, type SaveState } from "./use-autosave";
 
 const SECTIONS = [

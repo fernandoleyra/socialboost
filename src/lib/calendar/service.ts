@@ -3,9 +3,11 @@ import { authEnabled, icsKey as gateIcsKey, safeEqual } from "@/lib/auth";
 import { getDb, logActivity } from "@/lib/db";
 import { HttpError } from "@/lib/http";
 import { getSetting, setSetting } from "@/lib/settings";
-import { createPost, getPost, getStrategy, listMemories, listPosts, saveStrategy, updatePost, type Profile } from "@/lib/repo";
+import { createPost, getMemory, getPost, getStrategy, listMemories, listPosts, saveStrategy, updatePost, type Profile } from "@/lib/repo";
 import { getLinkedInAccount } from "@/lib/linkedin";
+import { parseAngleField } from "@/lib/factory/angles";
 import { STRUCTURES } from "@/lib/factory/structures";
+import { normalizeStrategy } from "@/lib/strategy";
 import type { Post, Strategy } from "@/lib/types";
 import { buildIcs, type IcsEvent } from "./ics";
 import { computeInsights, type Insights, type InsightPillar } from "./insights";
@@ -34,20 +36,28 @@ function hookOf(body: string): string {
   return (body.split("\n").find((l) => l.trim()) ?? "").trim();
 }
 
+/**
+ * The line that names a post on the calendar: its first line, else the hook of the angle chosen
+ * in the Studio (posts.angle JSON), else the story's title. Planned ideas have no text yet.
+ */
+function previewOf(p: Post, memoryTitle: string | null): string {
+  return hookOf(p.body) || parseAngleField(p.angle).selected?.hook || memoryTitle || "";
+}
+
 function postInstant(p: Post): string | null {
   const raw = p.status === "published" ? (p.publishedAt ?? p.scheduledAt) : p.scheduledAt;
   const d = parseDbDate(raw);
   return d ? d.toISOString() : null;
 }
 
-export function toCalendarPost(p: Post, tz: string, memoryTitles: Map<string, string>, now: Date): CalendarPost {
+function toCalendarPost(p: Post, tz: string, memoryTitles: Map<string, string>, now: Date): CalendarPost {
   const at = postInstant(p);
   return {
     id: p.id,
     status: p.status,
     state: displayState(p, now),
     pillar: p.pillar,
-    hook: hookOf(p.body),
+    hook: previewOf(p, p.memoryId ? (memoryTitles.get(p.memoryId) ?? null) : null),
     body: p.body,
     photoId: p.photoId,
     memoryId: p.memoryId,
@@ -66,6 +76,12 @@ export function toCalendarPost(p: Post, tz: string, memoryTitles: Map<string, st
     comments: p.comments,
     reposts: p.reposts,
   };
+}
+
+/** One post in calendar shape, with its story title (for single-post responses). */
+export function calendarPostOf(profile: Profile, p: Post, now: Date = new Date()): CalendarPost {
+  const memory = p.memoryId ? getMemory(p.memoryId) : null;
+  return toCalendarPost(p, safeTimezone(profile.timezone), new Map(memory ? [[memory.id, memory.title]] : []), now);
 }
 
 function strategyOf(profileId: string): Strategy | null {
@@ -295,6 +311,7 @@ export function icsFeed(profile: Profile, origin: string, now: Date = new Date()
   const tz = safeTimezone(profile.timezone);
   const strategy = strategyOf(profile.id);
   const pillarNames = new Map(pillarsOf(strategy).map((p) => [p.id, p.name]));
+  const titles = memoryTitleMap(profile.id);
   const lo = now.getTime() - 60 * DAY_MS;
   const hi = now.getTime() + 180 * DAY_MS;
   const events: IcsEvent[] = [];
@@ -305,7 +322,7 @@ export function icsFeed(profile: Profile, origin: string, now: Date = new Date()
     const t = Date.parse(at);
     if (t < lo || t > hi) continue;
     const state = displayState(p, now);
-    const hook = hookOf(p.body);
+    const hook = previewOf(p, p.memoryId ? (titles.get(p.memoryId) ?? null) : null);
     const label = state === "published" ? "Posted" : state === "scheduled" ? "LinkedIn post" : STATE_META[state].label;
     const link = `${origin}/studio/${p.id}`;
     const footer = [`${STATE_META[state].label} · ${timeOf(at, tz)} ${tz}`, ...(p.linkedinUrl ? [`On LinkedIn: ${p.linkedinUrl}`] : []), `Open in SocialBoost: ${link}`];
@@ -427,7 +444,7 @@ export function applyWeights(profile: Profile, weights?: Record<string, number>)
     if (!rec.ready) throw new HttpError(409, rec.reason ?? "Not enough results yet.");
     next = Object.fromEntries(rec.rows.map((r) => [r.pillarId, r.suggested]));
   }
-  const updated: Strategy = { ...strategy, pillars: strategy.pillars.map((p) => (next[p.id] !== undefined ? { ...p, weight: Math.round(next[p.id]) } : p)) };
+  const updated = normalizeStrategy({ ...strategy, pillars: strategy.pillars.map((p) => (next[p.id] !== undefined ? { ...p, weight: Math.round(next[p.id]) } : p)) });
   saveStrategy(profile.id, updated);
   logActivity("strategy", `Updated pillar weights from Insights: ${updated.pillars.map((p) => `${p.name} ${p.weight}%`).join(", ")}`, { profileId: profile.id });
   return updated;

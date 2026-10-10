@@ -218,4 +218,35 @@ describe("memory service", () => {
     expect(llm.embed).toHaveBeenCalledTimes(1);
     expect(repo.getMemoryEmbedding(target.id)).toEqual([0, 0, 1]);
   });
+
+  it("puts a story's first photo on its unfinished posts, never on approved ones", async () => {
+    const m = repo.createMemory(profileId, {
+      title: "The empty booth",
+      summary: "",
+      story: "Nobody came to our booth for the first two hours.",
+      when: "",
+      place: "",
+      people: [],
+      emotions: [],
+      details: [],
+      quotes: [],
+      lesson: "",
+      pillar: null,
+      tags: [],
+      angles: [],
+      strength: 3,
+    });
+    const planned = repo.createPost({ profileId, memoryId: m.id, status: "idea", scheduledAt: new Date(Date.now() + 86_400_000).toISOString() });
+    const approved = repo.createPost({ profileId, memoryId: m.id, status: "approved", body: "Nobody came to our booth." });
+
+    const first = await photos.processUpload(profileId, await phoneJpeg(), { memoryId: m.id });
+    expect(repo.getPost(planned.id)!.photoId).toBe(first.id);
+    expect(repo.getPost(approved.id)!.photoId).toBeNull();
+
+    // Only the first photo is adopted: a post whose photo was removed on purpose stays without one.
+    repo.updatePost(planned.id, { photoId: null });
+    const loose = await photos.processUpload(profileId, await phoneJpeg());
+    photos.editPhoto(loose, { memoryId: m.id });
+    expect(repo.getPost(planned.id)!.photoId).toBeNull();
+  });
 });

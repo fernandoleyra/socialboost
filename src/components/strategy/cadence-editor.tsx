@@ -4,7 +4,7 @@ import Link from "next/link";
 import { Minus, Plus } from "lucide-react";
 import type { Strategy } from "@/lib/types";
 import { IconButton, Input, cx } from "@/components/ui";
-import { MAX_POSTS_PER_WEEK, MIN_POSTS_PER_WEEK, WEEKDAYS, setPostsPerWeek, toggleDay } from "./model";
+import { MAX_POSTS_PER_WEEK, MIN_POSTS_PER_WEEK, WEEKDAYS, setPostsPerWeek, toggleDay } from "@/lib/strategy";
 
 type Cadence = Strategy["cadence"];
 

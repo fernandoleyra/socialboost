@@ -217,6 +217,17 @@ describe("studio flow", () => {
     expect((await autopilotRoute.POST(req("POST", "/api/studio/autopilot", { postId: idea.id }))).status).toBe(409);
   });
 
+  it("queues an approved post for the date the calendar planned it on", async () => {
+    const slot = new Date(Date.now() + 2 * 86_400_000).toISOString();
+    const { post: planned } = await (await postsRoute.POST(req("POST", "/api/posts", { memoryId, scheduledAt: slot }))).json();
+    const patch = (body: unknown) => postRoute.PATCH(req("PATCH", `/api/posts/${planned.id}`, body), ctx(planned.id));
+    await patch({ body: "At 7:40 in the Basel office our biggest client asked one question." });
+    const { post } = await (await patch({ status: "approved" })).json();
+    expect(post).toMatchObject({ status: "scheduled", scheduledAt: slot });
+    // Unscheduling keeps it approved and off the calendar.
+    expect((await (await patch({ status: "approved", scheduledAt: null })).json()).post).toMatchObject({ status: "approved", scheduledAt: null });
+  });
+
   it("never serves another profile's post", async () => {
     const other = repo.createProfile({ name: "Someone Else" });
     const res = await postRoute.GET(req("GET", `/api/posts/${postId}`), ctx(postId));

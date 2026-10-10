@@ -2,7 +2,7 @@ import { z } from "zod";
 import { HttpError, handle, ok } from "@/lib/http";
 import { getProfile, getStrategy, requireProfile, saveStrategy, updateProfile, type Profile } from "@/lib/repo";
 import { StrategySchema } from "@/lib/types";
-import { emptyStrategy, normalizeStrategy, prepareStrategyInput } from "@/components/strategy/model";
+import { emptyStrategy, normalizeStrategy, prepareStrategyInput } from "@/lib/strategy";
 
 export const dynamic = "force-dynamic";
 

@@ -15,7 +15,7 @@ import {
   sharePercents,
   toggleDay,
   prepareStrategyInput,
-} from "./model";
+} from "./strategy";
 
 const cadence = { postsPerWeek: 3, days: [2, 3, 4], time: "08:30" };
 

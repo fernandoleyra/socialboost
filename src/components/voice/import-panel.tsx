@@ -1,15 +1,14 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { ClipboardPaste, FileSpreadsheet, MousePointerClick, Upload } from "lucide-react";
+import { ClipboardPaste, CloudDownload, FileSpreadsheet, Upload } from "lucide-react";
 import { Button, Segmented, Textarea, cx } from "@/components/ui";
 import { ImportFormatError, parsePastedPosts, parseSharesCsv, type ParseResult } from "@/lib/voice/parse";
-import type { ImportOrigin, ImportResult } from "@/lib/voice/types";
-import { HelperPanel } from "./helper-panel";
+import type { ImportResult } from "@/lib/voice/types";
 import { ImportPreview } from "./import-preview";
+import { LinkedInImportTab } from "./linkedin-import";
 
-type Tab = "paste" | "export" | "helper";
-const ORIGIN: Record<Tab, ImportOrigin> = { paste: "paste", export: "export", helper: "helper" };
+type Tab = "paste" | "export" | "linkedin";
 const MAX_FILE_BYTES = 15 * 1024 * 1024;
 
 function formatError(e: unknown): string {
@@ -46,15 +45,20 @@ function ExportTab({ onParsed }: { onParsed: (r: ParseResult) => void }) {
 
   return (
     <div className="space-y-5">
+      <p className="t-subhead text-label-2">Works for every LinkedIn member: LinkedIn&apos;s own copy of your data holds the full text and date of every post you wrote.</p>
       <ol className="space-y-2 t-subhead text-label-2">
         <li>
           <span className="font-semibold text-label">1.</span> On LinkedIn: <span className="text-label">Me → Settings &amp; Privacy → Data privacy → Get a copy of your data</span>.
         </li>
         <li>
-          <span className="font-semibold text-label">2.</span> Request the archive. LinkedIn emails a download link, usually within a day; it works for 72 hours.
+          <span className="font-semibold text-label">2.</span> Choose <span className="text-label">Want something in particular?</span>, tick <span className="text-label">Posts</span> (called{" "}
+          <span className="text-label">Shares</span> in some versions), and request the archive.
         </li>
         <li>
-          <span className="font-semibold text-label">3.</span> Unzip it and drop <span className="text-label">Shares.csv</span> here. It holds the full text and date of every post you wrote.
+          <span className="font-semibold text-label">3.</span> LinkedIn emails you a download link, usually within a day. The link works for 72 hours.
+        </li>
+        <li>
+          <span className="font-semibold text-label">4.</span> Unzip the download and drop <span className="text-label">Shares.csv</span> here.
         </li>
       </ol>
       <button
@@ -120,11 +124,19 @@ export function PasteTab({ headerLines, kind, onParsed }: { headerLines: string[
   );
 }
 
-/** Bring in the person's own posts: paste, LinkedIn's export, or the browser helper. Always previews first. */
+/**
+ * Bring in the person's own posts: paste or Shares.csv (previewed first), or LinkedIn's portability
+ * API for members in the EEA and Switzerland (imported directly: it only returns their own posts).
+ */
 export function ImportPanel({ author, onImported }: { author: { name: string; headline: string }; onImported: (r: ImportResult) => void }) {
   const [tab, setTab] = useState<Tab>("paste");
   const [parsed, setParsed] = useState<ParseResult | null>(null);
   const [key, setKey] = useState(0);
+  const done = (r: ImportResult) => {
+    setParsed(null);
+    setKey((k) => k + 1);
+    onImported(r);
+  };
 
   return (
     <div className="card p-5 sm:p-6">
@@ -132,13 +144,9 @@ export function ImportPanel({ author, onImported }: { author: { name: string; he
         <ImportPreview
           parsed={parsed}
           kind="own"
-          origin={ORIGIN[tab]}
+          origin={tab === "export" ? "export" : "paste"}
           onCancel={() => setParsed(null)}
-          onImported={(r) => {
-            setParsed(null);
-            setKey((k) => k + 1);
-            onImported(r);
-          }}
+          onImported={done}
         />
       )}
       {/* Kept mounted while previewing so "Back" returns to what was pasted. */}
@@ -151,7 +159,7 @@ export function ImportPanel({ author, onImported }: { author: { name: string; he
               {
                 value: "paste",
                 label: (
-                  <span className="flex items-center gap-1.5">
+                  <span className="flex items-center gap-1.5 whitespace-nowrap">
                     <ClipboardPaste className="size-3.5" />
                     Paste posts
                   </span>
@@ -160,18 +168,18 @@ export function ImportPanel({ author, onImported }: { author: { name: string; he
               {
                 value: "export",
                 label: (
-                  <span className="flex items-center gap-1.5">
+                  <span className="flex items-center gap-1.5 whitespace-nowrap">
                     <FileSpreadsheet className="size-3.5" />
                     LinkedIn export
                   </span>
                 ),
               },
               {
-                value: "helper",
+                value: "linkedin",
                 label: (
-                  <span className="flex items-center gap-1.5">
-                    <MousePointerClick className="size-3.5" />
-                    Browser helper
+                  <span className="flex items-center gap-1.5 whitespace-nowrap">
+                    <CloudDownload className="size-3.5" />
+                    From LinkedIn (EU &amp; Switzerland)
                   </span>
                 ),
               },
@@ -185,8 +193,8 @@ export function ImportPanel({ author, onImported }: { author: { name: string; he
           <div className={cx(tab !== "export" && "hidden")}>
             <ExportTab onParsed={setParsed} />
           </div>
-          <div className={cx(tab !== "helper" && "hidden")}>
-            <HelperPanel onParsed={setParsed} />
+          <div className={cx(tab !== "linkedin" && "hidden")}>
+            <LinkedInImportTab onImported={done} onUseExport={() => setTab("export")} />
           </div>
         </div>
       </div>

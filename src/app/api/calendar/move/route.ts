@@ -2,8 +2,7 @@ import { z } from "zod";
 import { handle, ok } from "@/lib/http";
 import { requireProfile } from "@/lib/repo";
 import { jsonBody } from "@/lib/calendar/body";
-import { moveOnCalendar, toCalendarPost } from "@/lib/calendar/service";
-import { safeTimezone } from "@/lib/calendar/time";
+import { calendarPostOf, moveOnCalendar } from "@/lib/calendar/service";
 
 export const dynamic = "force-dynamic";
 
@@ -23,5 +22,5 @@ export const POST = handle(async (req: Request) => {
   const body = await jsonBody(req, Body);
   const now = new Date();
   const post = moveOnCalendar(profile, body.postId, body.scheduledAt, now);
-  return ok({ post: toCalendarPost(post, safeTimezone(profile.timezone), new Map(), now) });
+  return ok({ post: calendarPostOf(profile, post, now) });
 });

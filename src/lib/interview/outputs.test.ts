@@ -22,6 +22,15 @@ describe("tidyList", () => {
   it("trims, strips bullets, de-duplicates case-insensitively and caps", () => {
     expect(tidyList([" - Clients ", "clients", "", null, "1. Hiring", "Investors"], 2)).toEqual(["Clients", "Hiring"]);
   });
+
+  it("keeps numbers that start an item", () => {
+    expect(tidyList(["40,000 francs over budget", "3 weeks late", "2) Second point", "• 12 people in the room"])).toEqual([
+      "40,000 francs over budget",
+      "3 weeks late",
+      "Second point",
+      "12 people in the room",
+    ]);
+  });
 });
 
 describe("cardToMemory", () => {
@@ -132,6 +141,14 @@ describe("mergeStrategy", () => {
     const s = mergeStrategy(existing, extract(), { language: "en" });
     expect(s.positioning).toBe("Keep me");
     expect(s.cta).toBe("DM me");
+  });
+
+  it("never trims lists the person wrote, and stores a normalized strategy", () => {
+    const goals = Array.from({ length: 11 }, (_, i) => `Goal ${i + 1}`);
+    const existing = StrategySchema.parse({ goals, pillars: [{ id: "p1", name: "  Banks ", weight: 100, color: "chartreuse" }] });
+    const s = mergeStrategy(existing, extract({ goals: ["New goal"] }), { language: "en" });
+    expect(s.goals).toEqual(goals);
+    expect(s.pillars[0]).toMatchObject({ id: "p1", name: "Banks", weight: 100, color: "blue" });
   });
 });
 

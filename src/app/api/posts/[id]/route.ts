@@ -12,6 +12,8 @@ export const dynamic = "force-dynamic";
 
 type Ctx = { params: Promise<{ id: string }> };
 
+const PRE_APPROVAL: Post["status"][] = ["idea", "draft", "review"];
+
 /** GET /api/posts/[id] → { post, memory, photo, memoryPhotos, libraryPhotos } */
 export const GET = handle(async (_req: Request, ctx: Ctx) => {
   const profile = requireProfile();
@@ -66,8 +68,13 @@ export const PATCH = handle(async (req: Request, ctx: Ctx) => {
 
   const nextBody = patch.body ?? post.body;
   const nextScheduled = patch.scheduledAt !== undefined ? patch.scheduledAt : post.scheduledAt;
-  if (patch.status && patch.status !== post.status) {
-    const check = checkStatusChange({ from: post.status, to: patch.status, body: nextBody, scheduledAt: nextScheduled });
+  // Approving a post that already has a future date on the calendar (Auto-plan put it there, or it
+  // was dragged there before approval) queues it for that time: the Calendar's rule that a dated,
+  // approved post is a scheduled one. Otherwise the scheduler would never pick it up.
+  const status =
+    patch.status === "approved" && PRE_APPROVAL.includes(post.status) && nextScheduled && Date.parse(nextScheduled) > Date.now() ? "scheduled" : patch.status;
+  if (status && status !== post.status) {
+    const check = checkStatusChange({ from: post.status, to: status, body: nextBody, scheduledAt: nextScheduled });
     if (!check.ok) throw new HttpError(400, check.message, check.hint);
   } else if (post.status === "scheduled" && patch.scheduledAt !== undefined && patch.scheduledAt !== post.scheduledAt) {
     // Moving a scheduled post: the new time must be valid too, or the scheduler would publish it at once.
@@ -92,7 +99,7 @@ export const PATCH = handle(async (req: Request, ctx: Ctx) => {
       update.angle = serializeAngleField({ ...field, selected: a });
     }
   }
-  if (patch.status && patch.status !== post.status) update.status = patch.status;
+  if (status && status !== post.status) update.status = status;
   if (Object.keys(update).length) post = updatePost(post.id, update);
 
   if (update.status === "approved" || update.status === "scheduled" || update.status === "review") {

@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { getActiveProfile, getStrategy, listInterviews, listMemories } from "@/lib/repo";
 import { safeTimezone } from "@/lib/dashboard";
 import { StrategyEditor } from "@/components/strategy/strategy-editor";
-import { pillarIdOf } from "@/components/strategy/model";
+import { pillarIdOf } from "@/lib/strategy";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Strategy — SocialBoost" };

@@ -66,7 +66,8 @@ export const GOOD_POST_COUNT = 10;
 
 export const IMPORT_KINDS = ["own", "reference"] as const;
 export const IMPORT_FORMATS = ["text", "csv", "json"] as const;
-export const IMPORT_ORIGINS = ["paste", "export", "helper"] as const;
+/** Where posts came from: pasted, LinkedIn's data export (Shares.csv), or LinkedIn's portability API. */
+export const IMPORT_ORIGINS = ["paste", "export", "linkedin"] as const;
 export type ImportOrigin = (typeof IMPORT_ORIGINS)[number];
 
 export const ImportRequestSchema = z
@@ -80,6 +81,20 @@ export const ImportRequestSchema = z
   })
   .refine((r) => r.kind === "own" || !!r.author, { message: "Add the creator's name", path: ["author"] });
 export type ImportRequest = z.infer<typeof ImportRequestSchema>;
+
+/** POST /api/voice/import/linkedin: a Member Data Portability token, used for this one import and never stored. */
+export const LinkedInImportRequestSchema = z.object({
+  token: z
+    .string()
+    .trim()
+    .min(20, "That doesn't look like a LinkedIn access token. Copy the whole token from the OAuth Token Tool.")
+    .max(4000, "That's too long for a LinkedIn access token."),
+});
+
+export type LinkedInImportResult = ImportResult & {
+  /** Pages of LinkedIn's snapshot that held posts. */
+  pages: number;
+};
 
 const item = z.string().trim().min(1).max(300, "keep each line under 300 characters");
 const lines = (max: number) => z.array(item).max(max, `${max} lines at most`);

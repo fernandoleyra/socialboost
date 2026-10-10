@@ -25,6 +25,7 @@ import {
   Type,
   Wand2,
 } from "lucide-react";
+import { uploadPhoto } from "@/components/photos/upload";
 import { Button, Chip, IconButton, Input, Sheet, Typing, api, cx, streamText, toast } from "@/components/ui";
 import { hookOf, parseAngleField, replaceHook, type Angle, type HookOption } from "@/lib/factory/angles";
 import { cleanPost, toClipboard } from "@/lib/factory/clean";
@@ -445,9 +446,16 @@ export function PostEditor(props: EditorProps) {
 
   const setStatus = (status: PostStatus, extra: Record<string, unknown> = {}, done?: string) => patch({ status, ...extra }, done ?? STATUS_META[status].label);
 
+  /** A post that already has a future date on the calendar is queued for it on approval (PATCH /api/posts/[id]). */
+  const approveNow = async () => {
+    const p = await patch({ status: "approved" });
+    if (p) toast(p.status === "scheduled" && p.scheduledAt ? `Approved and queued for ${formatWhen(p.scheduledAt)}` : "Approved. Schedule it when you're ready.");
+    return p;
+  };
+
   const approve = () => {
     if (!post.photoId) setSheet("approve-no-photo");
-    else void setStatus("approved", {}, "Approved. Schedule it when you're ready.");
+    else void approveNow();
   };
 
   const schedule = async (iso: string) => {
@@ -514,13 +522,8 @@ export function PostEditor(props: EditorProps) {
     }
     setUploading(true);
     try {
-      const form = new FormData();
-      form.append("file", file);
-      if (post.memoryId) form.append("memoryId", post.memoryId);
-      const res = await fetch("/api/photos", { method: "POST", body: form });
-      const json = (await res.json().catch(() => ({}))) as { photo?: { id: string }; error?: string; hint?: string };
-      if (!res.ok || !json.photo) throw new Error(json.hint ? `${json.error} — ${json.hint}` : (json.error ?? `Upload failed (${res.status})`));
-      await choosePhoto(json.photo.id);
+      const photo = await uploadPhoto(file, { memoryId: post.memoryId });
+      await choosePhoto(photo.id);
     } catch (e) {
       toast((e as Error).message, "error");
     } finally {
@@ -1018,7 +1021,7 @@ export function PostEditor(props: EditorProps) {
         size="sm"
         footer={
           <>
-            <Button variant="plain" onClick={() => void setStatus("approved", {}, "Approved").then(() => setSheet(null))} loading={busy === "status"}>
+            <Button variant="plain" onClick={() => void approveNow().then(() => setSheet(null))} loading={busy === "status"}>
               Approve anyway
             </Button>
             <Button variant="primary" onClick={() => setSheet("photo")}>

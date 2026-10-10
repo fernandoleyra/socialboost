@@ -11,7 +11,7 @@ import { errorMessage, firstLine, fmtCount, fmtDay, useHydrated } from "./format
 
 type Sort = "recent" | "top";
 const PAGE = 15;
-const SOURCE_LABEL: Record<string, string> = { paste: "Pasted", export: "Export", helper: "Helper" };
+const SOURCE_LABEL: Record<string, string> = { paste: "Pasted", export: "Export", linkedin: "LinkedIn" };
 const METRICS = [
   { key: "reactions", label: "Reactions", icon: ThumbsUp },
   { key: "comments", label: "Comments", icon: MessageCircle },

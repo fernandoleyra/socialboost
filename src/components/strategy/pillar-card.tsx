@@ -4,7 +4,7 @@ import Link from "next/link";
 import { Check, Mic, Trash2 } from "lucide-react";
 import type { Pillar } from "@/lib/types";
 import { IconButton, Input, TONES, cx } from "@/components/ui";
-import { PILLAR_COLORS } from "./model";
+import { PILLAR_COLORS } from "@/lib/strategy";
 import { AutoTextarea } from "./auto-textarea";
 import { ListEditor } from "./list-editor";
 

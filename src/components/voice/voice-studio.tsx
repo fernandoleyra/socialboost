@@ -15,7 +15,7 @@ import { StyleGuide } from "./style-guide";
 
 function Onboarding() {
   const steps = [
-    { icon: Import, title: "Bring in your posts", body: `Paste a few, upload LinkedIn's export, or use the browser helper. ${GOOD_POST_COUNT} or more of your best is ideal.` },
+    { icon: Import, title: "Bring in your posts", body: `Paste a few or upload LinkedIn's data export. In the EU and Switzerland you can also import them straight from LinkedIn. ${GOOD_POST_COUNT} or more of your best is ideal.` },
     { icon: WandSparkles, title: "Analyze your voice", body: "We measure your rhythm and habits, then your model writes a style guide you can edit." },
     { icon: Ban, title: "Add what you'd never say", body: "Words and moves that aren't you. They override everything, in every draft." },
   ];

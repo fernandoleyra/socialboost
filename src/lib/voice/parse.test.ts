@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ImportFormatError, cleanPostText, parseCount, parseExportDate, parseHelperJson, parsePastedPosts, parseSharesCsv } from "./parse";
+import { ImportFormatError, cleanPostText, parseCount, parseExportDate, parsePastedPosts, parsePostsJson, parseShareRecords, parseSharesCsv } from "./parse";
 
 const LONG_A = "Yesterday at 6:40 a.m. a driver named Joost handed me a paper map of our yard. He had drawn every pothole by hand.";
 const LONG_B = "Four reasons warehouse projects die, from what I have seen inside. Nobody owns the result, ten people own a slide each.";
@@ -180,14 +180,52 @@ describe("parseSharesCsv", () => {
   });
 });
 
-describe("parseHelperJson", () => {
-  it("reads the helper's posts with counts as strings or numbers", () => {
+describe("parseShareRecords (Member Data Portability rows)", () => {
+  it("reads rows keyed like the Shares.csv headers, skipping bare reposts", () => {
+    const r = parseShareRecords([
+      { Date: "2025-01-03 10:00:00", ShareLink: "https://www.linkedin.com/feed/update/urn:li:share:1", ShareCommentary: `${LONG_A}\r\nhashtag#Ops`, SharedUrl: "", MediaUrl: "", Visibility: "MEMBER_NETWORK" },
+      { Date: "2025-01-04 10:00:00", ShareLink: "https://www.linkedin.com/feed/update/urn:li:share:2", ShareCommentary: "", SharedUrl: "https://example.com", Visibility: "PUBLIC" },
+    ]);
+    expect(r.posts).toHaveLength(1);
+    expect(r.skipped).toBe(1);
+    expect(r.posts[0]).toEqual({ text: `${LONG_A}\n#Ops`, url: "https://www.linkedin.com/feed/update/urn:li:share:1", postedAt: "2025-01-03T10:00:00.000Z" });
+  });
+
+  it("matches keys in any casing or spacing, and tolerates odd values", () => {
+    const r = parseShareRecords([
+      { "Share Commentary": LONG_A, date: "1735898400000", "share link": "javascript:alert(1)" },
+      { share_commentary: LONG_B, DATE: null, sharelink: 42 },
+      { shareCommentary: { nested: true } },
+    ]);
+    expect(r.posts.map((p) => p.text)).toEqual([LONG_A, LONG_B]);
+    expect(r.posts[0].postedAt).toBe("2025-01-03T10:00:00.000Z");
+    expect(r.posts[0].url).toBeUndefined();
+    expect(r.posts[1].postedAt).toBeNull();
+    expect(r.skipped).toBe(1);
+  });
+
+  it("drops rows repeated across pages", () => {
+    const row = { ShareCommentary: LONG_A, Date: "2025-01-03 10:00:00" };
+    const r = parseShareRecords([row, { ...row }]);
+    expect(r.posts).toHaveLength(1);
+    expect(r.skipped).toBe(1);
+  });
+
+  it("names the fields when the shape is unknown, and explains an all-repost history", () => {
+    expect(() => parseShareRecords([{ Message: LONG_A, Link: "x" }])).toThrow(/Message, Link/);
+    expect(() => parseShareRecords([{ ShareCommentary: "" }, { ShareCommentary: "  " }])).toThrow(/repost/);
+    expect(parseShareRecords([]).posts).toEqual([]);
+  });
+});
+
+describe("parsePostsJson", () => {
+  it("reads posts with counts as strings or numbers", () => {
     const json = JSON.stringify([
       { text: LONG_A, url: "https://www.linkedin.com/feed/update/urn:li:activity:7/", postedAt: "2026-09-17T08:00:00.000Z", reactions: "1,204", comments: 31, reposts: "2", impressions: "12.4K" },
       { text: `${LONG_B} …more`, url: "javascript:alert(1)", reactions: null },
       { text: "" },
     ]);
-    const r = parseHelperJson(json);
+    const r = parsePostsJson(json);
     expect(r.posts).toHaveLength(2);
     expect(r.skipped).toBe(1);
     expect(r.posts[0]).toMatchObject({ reactions: 1204, comments: 31, reposts: 2, impressions: 12400, postedAt: "2026-09-17T08:00:00.000Z" });
@@ -197,13 +235,13 @@ describe("parseHelperJson", () => {
 
   it("leaves already-clean texts alone when asked (preview of Shares.csv posts)", () => {
     const text = `${LONG_A}\n\nLike\n\n2026`;
-    expect(parseHelperJson(JSON.stringify([{ text }]), { clean: false }).posts[0].text).toBe(text);
-    expect(parseHelperJson(JSON.stringify([{ text }])).posts[0].text).not.toContain("Like");
+    expect(parsePostsJson(JSON.stringify([{ text }]), { clean: false }).posts[0].text).toBe(text);
+    expect(parsePostsJson(JSON.stringify([{ text }])).posts[0].text).not.toContain("Like");
   });
 
   it("accepts {posts: [...]} and rejects non-JSON", () => {
-    expect(parseHelperJson(JSON.stringify({ posts: [{ text: LONG_A }] })).posts).toHaveLength(1);
-    expect(() => parseHelperJson("not json")).toThrow(ImportFormatError);
-    expect(() => parseHelperJson('{"a":1}')).toThrow(/list of posts/);
+    expect(parsePostsJson(JSON.stringify({ posts: [{ text: LONG_A }] })).posts).toHaveLength(1);
+    expect(() => parsePostsJson("not json")).toThrow(ImportFormatError);
+    expect(() => parsePostsJson('{"a":1}')).toThrow(/list of posts/);
   });
 });

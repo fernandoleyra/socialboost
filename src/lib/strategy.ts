@@ -1,6 +1,7 @@
 /**
- * Pure helpers for the Strategy editor and PUT /api/strategy.
- * No React, no server imports: shared by the client editor, the API route and unit tests.
+ * Pure Strategy helpers: the editor's model and the normalization every writer applies before
+ * saveStrategy (PUT /api/strategy, the positioning interview, Insights' weight update).
+ * No React, no server imports, so client components, route handlers and tests can all use it.
  */
 import { StrategySchema, type Pillar, type Strategy } from "@/lib/types";
 

@@ -3,17 +3,17 @@
 import { useRef, useState } from "react";
 import { Check, ImagePlus, Loader2, Sparkles } from "lucide-react";
 import { Button, Chip, Sheet, cx } from "@/components/ui";
+import { imageFilesFrom } from "@/components/photos/upload";
 import type { PhotoLite } from "@/lib/factory/types";
+import { ACCEPT_ATTR } from "@/lib/photo-core";
 import { photoSrc } from "./shared";
 
-export const MAX_PHOTO_BYTES = 25 * 1024 * 1024;
-
-/** Client-side guard before uploading; the Photos API validates again. */
+/**
+ * Client-side guard before uploading. Size is left to the Photos uploader, which shrinks
+ * oversized photos in the browser; the Photos API validates again.
+ */
 export function photoProblem(file: File): string | null {
-  const isImage = file.type.startsWith("image/") || /\.(heic|heif|jpe?g|png|webp)$/i.test(file.name);
-  if (!isImage) return `${file.name} isn't a photo. Use JPEG, PNG, WebP or HEIC.`;
-  if (file.size > MAX_PHOTO_BYTES) return `${file.name} is larger than 25 MB.`;
-  return null;
+  return imageFilesFrom([file]).length ? null : `${file.name} isn't a photo. Use JPEG, PNG, WebP or HEIC.`;
 }
 
 export function PhotoDrop({ onFile, uploading, compact }: { onFile: (f: File) => void; uploading: boolean; compact?: boolean }) {
@@ -37,7 +37,7 @@ export function PhotoDrop({ onFile, uploading, compact }: { onFile: (f: File) =>
       <input
         ref={input}
         type="file"
-        accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif"
+        accept={ACCEPT_ATTR}
         className="hidden"
         onChange={(e) => {
           const f = e.target.files?.[0];

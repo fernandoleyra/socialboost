@@ -2,9 +2,11 @@
  * Import parsers for the voice corpus. Pure (runs in the browser for the import preview
  * and on the server for the actual import), unit-tested.
  *
- *  - parsePastedPosts: free text pasted from LinkedIn or a doc, split into posts, UI junk removed
- *  - parseSharesCsv:   Shares.csv from LinkedIn's "Get a copy of your data" export
- *  - parseHelperJson:  JSON from the browser helper ([{text, url, postedAt, reactions, …}])
+ *  - parsePastedPosts:  free text pasted from LinkedIn or a doc, split into posts, UI junk removed
+ *  - parseSharesCsv:    Shares.csv from LinkedIn's "Get a copy of your data" export
+ *  - parseShareRecords: the same rows as JSON objects, from LinkedIn's Member Data Portability API
+ *  - parsePostsJson:    a JSON list of posts ([{text, url, postedAt, reactions, …}]): what the import
+ *                       preview sends back, and a way in for posts kept in other tools
  */
 import Papa from "papaparse";
 import { normalizeHashtags, normalizeLittleText, normalizeText, tidyBlankLines, wordCount } from "./text";
@@ -56,10 +58,11 @@ export function parseCount(value: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-/** Dates as LinkedIn exports write them ("2025-01-03 10:00:00 UTC", "2024-05-12 08:15:31") or anything Date can read. */
+/** Dates as LinkedIn exports write them ("2025-01-03 10:00:00 UTC", "2024-05-12 08:15:31"), epoch milliseconds, or anything Date can read. */
 export function parseExportDate(value: unknown): string | null {
   if (typeof value !== "string" || !value.trim()) return null;
   const v = value.trim();
+  if (/^\d{12,13}$/.test(v)) return new Date(Number(v)).toISOString();
   // "2025-01-03 10:00:00 UTC" has no ISO "T" and no offset; it's UTC. Anything with a T/offset goes to Date.
   const m = v.match(/^(\d{4})-(\d{2})-(\d{2})(?: (\d{2}):(\d{2})(?::(\d{2}))?)?(?:\s*UTC)?$/i);
   if (m) {
@@ -245,10 +248,33 @@ const SHARES_ALIASES = {
   link: ["sharelink", "shareurl", "sharepermalink", "postlink", "permalink", "postlinkurl"],
   text: ["sharecommentary", "commentary", "sharetext", "posttext"],
 } as const;
+type ShareRole = keyof typeof SHARES_ALIASES;
+
+/** Which column plays each role (-1 when absent). By normalized alias, never by position or casing: "ShareCommentary", "Share Commentary" and "SHARE_COMMENTARY" all match. */
+function resolveShareColumns(headers: string[]): Record<ShareRole, number> {
+  const norm = headers.map(normHeader);
+  return Object.fromEntries(
+    Object.entries(SHARES_ALIASES).map(([role, aliases]) => [role, norm.findIndex((h) => (aliases as readonly string[]).includes(h))]),
+  ) as Record<ShareRole, number>;
+}
 
 /** Some exports double-escape quotes inside the commentary (`""word""`). Undo that only when no single quote char is left. */
 function undoubleQuotes(text: string): string {
   return /""/.test(text) && !/(?<!")"(?!")/.test(text) ? text.replace(/""/g, '"') : text;
+}
+
+/** One Shares row as a post, or null for a bare repost: no commentary means nothing in the person's own words. */
+function shareRowToPost(cell: (role: ShareRole) => string): ParsedPost | null {
+  const raw = cell("text");
+  if (!raw) return null;
+  const text = tidyBlankLines(normalizeLittleText(undoubleQuotes(normalizeText(raw))));
+  const url = safeUrl(cell("link"));
+  return { text, ...(url ? { url } : {}), postedAt: parseExportDate(cell("date")) };
+}
+
+function finishShares(posts: ParsedPost[], skipped: number, allReposts: string): ParseResult {
+  if (posts.length === 0 && skipped > 0) throw new ImportFormatError(allReposts, "Write a few posts of your own first, or paste posts you wrote elsewhere.");
+  return finish(posts, skipped);
 }
 
 export function parseSharesCsv(csv: string): ParseResult {
@@ -258,60 +284,90 @@ export function parseSharesCsv(csv: string): ParseResult {
   const parsed = Papa.parse<string[]>(input, { header: false, skipEmptyLines: "greedy" });
   const rows = parsed.data.filter((r) => Array.isArray(r));
   if (rows.length === 0) throw new ImportFormatError("No rows found in that file.");
-  const header = rows[0].map(normHeader);
-  const idx = Object.fromEntries(
-    Object.entries(SHARES_ALIASES).map(([role, aliases]) => [role, header.findIndex((h) => (aliases as readonly string[]).includes(h))]),
-  ) as Record<keyof typeof SHARES_ALIASES, number>;
+  const idx = resolveShareColumns(rows[0]);
   if (idx.text < 0) {
     throw new ImportFormatError(
       `This doesn't look like Shares.csv: there's no ShareCommentary column (found: ${rows[0].slice(0, 8).join(", ") || "nothing"}).`,
       "In the LinkedIn export, pick the file called Shares.csv. Comments.csv and Connections.csv won't work here.",
     );
   }
-  const cell = (r: string[], i: number) => (i >= 0 ? (r[i] ?? "").trim() : "");
   let skipped = 0;
   const posts: ParsedPost[] = [];
   for (const r of rows.slice(1)) {
-    const raw = cell(r, idx.text);
-    if (!raw) {
-      // Bare reposts have no commentary: nothing in the person's own words.
-      skipped++;
-      continue;
-    }
-    const text = tidyBlankLines(normalizeLittleText(undoubleQuotes(raw)));
-    const url = safeUrl(cell(r, idx.link));
-    posts.push({ text, ...(url ? { url } : {}), postedAt: parseExportDate(cell(r, idx.date)) });
+    const post = shareRowToPost((role) => (idx[role] >= 0 ? (r[idx[role]] ?? "").trim() : ""));
+    if (post) posts.push(post);
+    else skipped++;
   }
-  if (posts.length === 0 && skipped > 0) {
-    throw new ImportFormatError("Every row in that file is a repost without your own words.", "Write a few posts of your own first, or paste posts you wrote elsewhere.");
-  }
-  return finish(posts, skipped);
+  return finishShares(posts, skipped, "Every row in that file is a repost without your own words.");
 }
 
 /* ------------------------------------------------------------------ */
-/* Browser helper JSON                                                 */
+/* Shares as JSON records (Member Data Portability API)                */
 /* ------------------------------------------------------------------ */
 
-type HelperItem = Record<string, unknown>;
+/** Snapshot values should be strings; numbers are tolerated, anything else counts as empty. */
+function recordValue(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return "";
+}
 
 /**
- * JSON posts: from the browser helper, or the import preview sending back the posts the person
- * kept. `clean: false` skips the LinkedIn-UI clean-up for texts that never had any (Shares.csv).
+ * Rows of LinkedIn's MEMBER_SHARE_INFO snapshot. Their keys aren't documented; they most likely
+ * mirror the Shares.csv headers, so they go through the same alias resolver (either casing works).
+ * Bare reposts (empty commentary) are skipped, like in the CSV.
  */
-export function parseHelperJson(raw: string, opts: { clean?: boolean } = {}): ParseResult {
+export function parseShareRecords(records: readonly Record<string, unknown>[]): ParseResult {
+  let skipped = 0;
+  let recognised = false;
+  const posts: ParsedPost[] = [];
+  for (const rec of records) {
+    const keys = Object.keys(rec);
+    const idx = resolveShareColumns(keys);
+    if (idx.text < 0) {
+      skipped++;
+      continue;
+    }
+    recognised = true;
+    const post = shareRowToPost((role) => (idx[role] >= 0 ? recordValue(rec[keys[idx[role]]]) : ""));
+    if (post) posts.push(post);
+    else skipped++;
+  }
+  if (!recognised && records.length > 0) {
+    const fields = [...new Set(records.flatMap((r) => Object.keys(r)))].slice(0, 12);
+    throw new ImportFormatError(
+      `LinkedIn sent your posts in a shape we don't recognise (fields: ${fields.join(", ") || "none"}).`,
+      "Use the LinkedIn data export (Shares.csv) for now, and report these field names so the import can learn them.",
+    );
+  }
+  return finishShares(posts, skipped, "Every post LinkedIn sent is a repost without your own words.");
+}
+
+/* ------------------------------------------------------------------ */
+/* JSON posts                                                          */
+/* ------------------------------------------------------------------ */
+
+type JsonItem = Record<string, unknown>;
+
+/**
+ * A JSON list of posts: the import preview sending back the posts the person kept, or posts
+ * exported from another tool. `clean: false` skips the LinkedIn-UI clean-up for texts that never
+ * had any (Shares.csv).
+ */
+export function parsePostsJson(raw: string, opts: { clean?: boolean } = {}): ParseResult {
   const clean = opts.clean ?? true;
   let data: unknown;
   try {
     data = JSON.parse(raw.trim());
   } catch {
-    throw new ImportFormatError("That isn't valid JSON.", "Run the browser helper again and use its Copy button, then paste here without changing anything.");
+    throw new ImportFormatError("That isn't valid JSON.", 'Send a list of posts, for example [{"text": "…", "url": "…", "postedAt": "2026-01-31"}].');
   }
   const list = Array.isArray(data) ? data : data && typeof data === "object" && Array.isArray((data as { posts?: unknown }).posts) ? (data as { posts: unknown[] }).posts : null;
-  if (!list) throw new ImportFormatError("Expected a list of posts.", "Paste exactly what the browser helper copied: it starts with [ and ends with ].");
+  if (!list) throw new ImportFormatError("Expected a list of posts.", 'Send a list that starts with [ and holds one {"text": "…"} per post.');
   if (list.length > 5000) throw new ImportFormatError("That's more than 5,000 posts. Import them in smaller batches.");
   let skipped = 0;
   const posts: ParsedPost[] = [];
-  for (const it of list as HelperItem[]) {
+  for (const it of list as JsonItem[]) {
     const rawText = typeof it?.text === "string" ? it.text : typeof it?.commentary === "string" ? it.commentary : "";
     if (!rawText.trim()) {
       skipped++;
@@ -336,6 +392,6 @@ export function parseHelperJson(raw: string, opts: { clean?: boolean } = {}): Pa
 /** Dispatch on the import format. Throws ImportFormatError with a user-facing message. */
 export function parseImport(format: "text" | "csv" | "json", content: string, opts: { headerLines?: string[]; clean?: boolean } = {}): ParseResult {
   if (format === "csv") return parseSharesCsv(content);
-  if (format === "json") return parseHelperJson(content, { clean: opts.clean });
+  if (format === "json") return parsePostsJson(content, { clean: opts.clean });
   return parsePastedPosts(content, opts);
 }

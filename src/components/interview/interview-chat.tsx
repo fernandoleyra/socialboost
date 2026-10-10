@@ -27,7 +27,7 @@ import { Composer } from "./composer";
 import { DepthPanel, DepthPill } from "./depth-panel";
 import { FinishedPanel } from "./finished-panel";
 import { PhotoDrop, PhotoRequestCard } from "./photo-drop";
-import { photoUrl } from "./upload";
+import { photoUrl } from "@/components/photos/upload";
 
 type Pending = { content: string; photoIds: string[]; baseCount: number };
 
