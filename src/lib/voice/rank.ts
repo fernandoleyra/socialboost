@@ -58,7 +58,7 @@ const timeOf = (c: RankCandidate) => {
 
 /** 1 for a post of typical length, falling toward 0 for very short or very long ones. */
 function lengthFit(len: number, median: number): number {
-  if (len < 200) return 0.2;
+  if (len < 200) return 0;
   if (!median) return 1;
   return Math.max(0, 1 - Math.abs(Math.log(len / median)) / 1.5);
 }
@@ -78,8 +78,8 @@ export function baseScores(cands: RankCandidate[]): BaseScores[] {
 
 /**
  * Pick k examples for the writer. With a query embedding: similarity first, then engagement,
- * recency and typical length; near-duplicates are skipped (MMR). Without embeddings: the
- * best-performing, recent, typical posts.
+ * recency and typical length; near-duplicates only come in when nothing else is left. Without
+ * embeddings: the best-performing, recent, typical posts.
  */
 export function rankExamples(cands: RankCandidate[], query: number[] | null, k: number): RankCandidate[] {
   if (cands.length === 0 || k <= 0) return [];
@@ -92,9 +92,11 @@ export function rankExamples(cands: RankCandidate[], query: number[] | null, k: 
   const hi = useSim ? Math.max(...known) : 0;
   const simNorm = sims.map((s) => (s === null ? 0 : hi > lo ? (s - lo) / (hi - lo) : 1));
 
+  // Very short or very long posts teach the rhythm badly, so length scales the whole score.
   const score = cands.map((_, i) => {
     const b = base[i];
-    return useSim ? 0.6 * simNorm[i] + 0.22 * b.engagement + 0.1 * b.recency + 0.08 * b.length : 0.55 * b.engagement + 0.3 * b.recency + 0.15 * b.length;
+    const fit = 0.3 + 0.7 * b.length;
+    return fit * (useSim ? 0.65 * simNorm[i] + 0.25 * b.engagement + 0.1 * b.recency : 0.65 * b.engagement + 0.35 * b.recency);
   });
 
   const chosen: number[] = [];
@@ -108,7 +110,7 @@ export function rankExamples(cands: RankCandidate[], query: number[] | null, k: 
         const a = cands[i].embedding;
         const b = cands[j].embedding;
         const near = a && b && a.length === b.length ? cosine(a, b) > 0.92 : cands[i].text.slice(0, 60).toLowerCase() === cands[j].text.slice(0, 60).toLowerCase();
-        if (near) penalty = 0.35;
+        if (near) penalty = 1;
       }
       const s = score[i] - penalty;
       if (s > bestScore) {

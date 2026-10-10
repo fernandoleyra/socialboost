@@ -3,6 +3,7 @@ import { embed } from "@/lib/llm";
 import { getProfile, getVoiceProfile, listVoiceEmbeddings, listVoiceSamples, type VoiceSample } from "@/lib/repo";
 import { buildVoicePromptBlock } from "./prompts";
 import { rankExamples } from "./rank";
+import { embedPending } from "./service";
 import { computeVoiceExtras } from "./stylometry";
 import { MIN_POSTS_FOR_ANALYSIS } from "./types";
 
@@ -17,10 +18,14 @@ export async function pickVoiceExamples(profileId: string, query: string, k = 3)
   const samples = listVoiceSamples(profileId, "own");
   if (samples.length === 0 || k <= 0) return [];
   const vectors = new Map(listVoiceEmbeddings(profileId, "own").map((e) => [e.id, e.embedding]));
+  if (vectors.size < samples.length) {
+    // New posts, or vectors cleared after an embedding-model change: index them for next time.
+    void embedPending(profileId).catch((err) => console.warn("[voice] embedding failed:", err instanceof Error ? err.message : err));
+  }
   let q: number[] | null = null;
   if (vectors.size > 0 && query.trim()) {
     try {
-      q = (await embed([query.slice(0, 2000)]))?.[0] ?? null;
+      q = (await embed([query.slice(0, 2000)], { kind: "query", timeoutMs: 20_000 }))?.[0] ?? null;
     } catch {
       q = null;
     }

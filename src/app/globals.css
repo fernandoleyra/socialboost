@@ -35,6 +35,8 @@
   --sys-gray: #8e8e93;
 
   --accent: var(--sys-blue);
+  /* Filled controls use Apple's increased-contrast blue: white on #0088FF is only 3.5:1, on #1E6EF4 it is 4.6:1. */
+  --accent-fill: #1e6ef4;
   --accent-contrast: #ffffff;
 
   /* --- Labels & fills --- */
@@ -53,16 +55,22 @@
   --bg-elevated: #ffffff;
   --bg-grouped: #f2f2f7;
 
-  /* --- Glass material --- */
-  --glass-tint: rgba(255, 255, 255, 0.58);
-  --glass-tint-strong: rgba(255, 255, 255, 0.74);
-  --glass-tint-clear: rgba(255, 255, 255, 0.22);
+  /* --- Glass material ---
+     --glass-adjust (set from Settings → Appearance, -30…+30) moves every glass surface
+     between "ultra-clear" and "fully tinted", like the iOS 27 Liquid Glass slider. */
+  --glass-adjust: 0;
+  --glass-base: #ffffff;
+  --glass-level: 60;
+  --glass-tint: color-mix(in srgb, var(--glass-base) calc(clamp(20, var(--glass-level) + var(--glass-adjust), 96) * 1%), transparent);
+  --glass-tint-strong: color-mix(in srgb, var(--glass-base) calc(clamp(34, var(--glass-level) + 16 + var(--glass-adjust), 97) * 1%), transparent);
+  --glass-tint-clear: color-mix(in srgb, var(--glass-base) calc(clamp(8, var(--glass-level) - 38 + var(--glass-adjust), 80) * 1%), transparent);
+  --glass-ring: rgba(0, 0, 0, 0.07);
   --glass-blur: 28px;
   --glass-saturate: 190%;
   --glass-brightness: 1.04;
   --glass-edge: rgba(255, 255, 255, 0.75);
   --glass-edge-soft: rgba(255, 255, 255, 0.28);
-  --glass-inner-glow: rgba(255, 255, 255, 0.55);
+  --glass-inner-glow: rgba(255, 255, 255, 0.7);
   --glass-shadow: 0 1px 1px rgba(0, 0, 0, 0.04), 0 8px 24px -6px rgba(15, 23, 42, 0.14), 0 24px 56px -24px rgba(15, 23, 42, 0.18);
   --glass-shadow-sm: 0 1px 1px rgba(0, 0, 0, 0.04), 0 4px 14px -4px rgba(15, 23, 42, 0.12);
 
@@ -124,13 +132,13 @@
   --bg-elevated: #1c1c1e;
   --bg-grouped: #000000;
 
-  --glass-tint: rgba(38, 38, 42, 0.52);
-  --glass-tint-strong: rgba(44, 44, 48, 0.72);
-  --glass-tint-clear: rgba(40, 40, 46, 0.2);
+  --glass-base: #26262b;
+  --glass-level: 54;
+  --glass-ring: rgba(0, 0, 0, 0.55);
   --glass-brightness: 0.92;
   --glass-edge: rgba(255, 255, 255, 0.22);
   --glass-edge-soft: rgba(255, 255, 255, 0.07);
-  --glass-inner-glow: rgba(255, 255, 255, 0.1);
+  --glass-inner-glow: rgba(255, 255, 255, 0.14);
   --glass-shadow: 0 1px 1px rgba(0, 0, 0, 0.3), 0 10px 30px -8px rgba(0, 0, 0, 0.55), 0 28px 60px -28px rgba(0, 0, 0, 0.6);
   --glass-shadow-sm: 0 1px 1px rgba(0, 0, 0, 0.3), 0 6px 16px -6px rgba(0, 0, 0, 0.5);
 
@@ -235,6 +243,7 @@ body {
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate)) brightness(var(--glass-brightness));
   backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate)) brightness(var(--glass-brightness));
   box-shadow:
+    0 0 0 0.5px var(--glass-ring),
     inset 0 1px 0 0 var(--glass-inner-glow),
     inset 0 -1px 0 0 var(--glass-edge-soft),
     var(--glass-shadow);
@@ -435,17 +444,17 @@ body {
 .btn-primary {
   color: var(--accent-contrast);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.24) 0%, rgba(255, 255, 255, 0) 55%),
-    var(--accent);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.22) 0%, rgba(255, 255, 255, 0) 55%),
+    var(--accent-fill);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.45),
     inset 0 -1px 0 rgba(0, 0, 0, 0.12),
-    0 6px 18px -6px color-mix(in srgb, var(--accent) 70%, transparent);
+    0 6px 18px -6px color-mix(in srgb, var(--accent-fill) 70%, transparent);
 }
 .btn-primary:hover:not(:disabled) {
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.32) 0%, rgba(255, 255, 255, 0.04) 55%),
-    var(--accent);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.3) 0%, rgba(255, 255, 255, 0.04) 55%),
+    var(--accent-fill);
 }
 
 /* Regular glass: secondary actions. */
@@ -703,7 +712,7 @@ select.field {
 .bubble-user {
   margin-left: auto;
   color: #fff;
-  background: var(--accent);
+  background: var(--accent-fill);
   border-bottom-right-radius: 6px;
 }
 
@@ -797,6 +806,30 @@ select.field {
 /* ---------------------------------------------------------------------
    Accessibility fallbacks
    --------------------------------------------------------------------- */
+
+/* In-app switches (Safari has no prefers-reduced-transparency). */
+:root[data-transparency="reduced"] .glass,
+:root[data-transparency="reduced"] .glass-strong,
+:root[data-transparency="reduced"] .glass-clear,
+:root[data-transparency="reduced"] .card,
+:root[data-transparency="reduced"] .btn-glass,
+:root[data-transparency="reduced"] .bubble-assistant {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  background: var(--bg-elevated) !important;
+}
+:root[data-contrast="more"] {
+  --accent: var(--accent-fill);
+  --label-2: rgba(60, 60, 67, 0.82);
+  --separator: rgba(60, 60, 67, 0.5);
+  --glass-edge: rgba(0, 0, 0, 0.45);
+}
+:root[data-contrast="more"][data-theme="dark"] {
+  --accent: #5cb8ff;
+  --label-2: rgba(235, 235, 245, 0.82);
+  --separator: rgba(235, 235, 245, 0.42);
+  --glass-edge: rgba(255, 255, 255, 0.5);
+}
 
 @media (prefers-reduced-transparency: reduce) {
   .glass,

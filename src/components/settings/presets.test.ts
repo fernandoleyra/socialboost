@@ -66,20 +66,22 @@ describe("model matching", () => {
 
 describe("presets", () => {
   it("lists distinct models and a pasteable pull command", () => {
-    expect(presetModels("recommended")).toEqual(["qwen3:14b", "qwen2.5vl:7b", "nomic-embed-text"]);
-    expect(presetModels("light")).toEqual(["qwen3:4b", "gemma3:4b", "nomic-embed-text"]);
+    expect(presetModels("recommended")).toEqual(["gemma4:12b", "embeddinggemma"]);
+    expect(presetModels("light")).toEqual(["qwen3.5:4b", "embeddinggemma"]);
+    expect(presetModels("multilingual")).toEqual(["qwen3.5:9b", "qwen3-embedding:0.6b"]);
     expect(pullAllCommand(["a", "b", "a"])).toBe("ollama pull a && ollama pull b");
   });
 
   it("routes preset tasks to Ollama and keeps transcription", () => {
     const base = settings({ routes: { ...settings().routes, transcription: { providerId: "stt", model: "whisper" } } });
     const light = applyPreset(base, "light");
-    expect(light.routes.writer).toEqual({ providerId: "ollama", model: "qwen3:4b", temperature: 0.8 });
-    expect(light.routes.vision?.model).toBe("gemma3:4b");
-    expect(light.routes.embedding).toEqual({ providerId: "ollama", model: "nomic-embed-text" });
+    expect(light.routes.writer).toEqual({ providerId: "ollama", model: "qwen3.5:4b", temperature: 0.8 });
+    expect(light.routes.vision?.model).toBe("qwen3.5:4b");
+    expect(light.routes.embedding).toEqual({ providerId: "ollama", model: "embeddinggemma" });
     expect(light.routes.transcription).toEqual({ providerId: "stt", model: "whisper" });
     expect(activePreset(light)).toBe("light");
-    expect(activePreset(base)).toBe("recommended");
+    expect(activePreset(base)).toBeNull();
+    expect(activePreset(applyPreset(base, "recommended"))).toBe("recommended");
   });
 
   it("adds a local Ollama provider when none exists", () => {

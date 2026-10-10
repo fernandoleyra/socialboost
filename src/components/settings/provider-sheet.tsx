@@ -106,7 +106,7 @@ export function ProviderSheet({
         <Field label="Name">
           <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="How it shows up in the task list" maxLength={60} />
         </Field>
-        <Field label="Address" hint={kind === "openai" ? "LM Studio: http://localhost:1234/v1 · llama.cpp: http://localhost:8080/v1 · OpenAI: https://api.openai.com/v1" : undefined}>
+        <Field label="Address" hint={kind === "openai" ? "LM Studio: http://localhost:1234/v1 · llama.cpp: http://localhost:9931/v1 · OpenAI: https://api.openai.com/v1" : undefined}>
           <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder={DEFAULT_BASE_URL[kind]} inputMode="url" spellCheck={false} />
         </Field>
         {kind !== "ollama" && (

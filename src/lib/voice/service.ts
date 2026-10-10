@@ -90,10 +90,9 @@ function indexedCount(profileId: string): number {
   return r.n;
 }
 
-function embeddingDims(profileId: string): { id: string; dims: number }[] {
-  return getDb()
-    .prepare(`SELECT id, json_array_length(embedding) AS dims FROM voice_samples WHERE profile_id = ? AND kind = 'own' AND embedding IS NOT NULL`)
-    .all(profileId) as { id: string; dims: number }[];
+function unembeddedIds(profileId: string): string[] {
+  const rows = getDb().prepare(`SELECT id FROM voice_samples WHERE profile_id = ? AND kind = 'own' AND embedding IS NULL`).all(profileId) as { id: string }[];
+  return rows.map((r) => r.id);
 }
 
 function requireSample(profileId: string, id: string): VoiceSample {
@@ -146,51 +145,24 @@ const EMBED_BATCH = 16;
 const EMBED_MAX_PER_RUN = 600;
 const inflight = new Map<string, Promise<number>>();
 
-/** Text sent to the embedding model for a post. */
-const sampleEmbeddingText = (text: string) => text.slice(0, 2000);
-
 /**
- * Embed own posts that have no vector yet (and, when the embedding model changed, re-embed the
- * ones with the old dimension). Best effort: returns how many were embedded, 0 when no embedding
- * model is available. One run per profile at a time.
+ * Embed own posts that have no vector yet (new imports, or all of them after the embedding
+ * model changed: Settings clears old vectors then). Best effort: returns how many were
+ * embedded, 0 when no embedding model answers. One run per profile at a time.
  */
-export function embedPending(profileId: string, opts: { verifyDims?: boolean } = {}): Promise<number> {
+export function embedPending(profileId: string): Promise<number> {
   const running = inflight.get(profileId);
   if (running) return running;
   const job = (async () => {
-    const own = listVoiceSamples(profileId, "own");
-    const dims = new Map(embeddingDims(profileId).map((r) => [r.id, r.dims]));
-    const queue = own.filter((s) => !dims.has(s.id));
-    const queued = new Set(queue.map((s) => s.id));
-    // A different embedding model was configured since older vectors were made: redo those too.
-    const enqueueMismatched = (target: number) => {
-      for (const s of own) {
-        const d = dims.get(s.id);
-        if (d !== undefined && d !== target && !queued.has(s.id)) {
-          queue.push(s);
-          queued.add(s.id);
-        }
-      }
-    };
-    let target: number | null = null;
-    if (queue.length === 0) {
-      if (!opts.verifyDims || dims.size === 0) return 0;
-      const probe = await embed(["voice"]);
-      if (!probe?.[0]) return 0;
-      target = probe[0].length;
-      enqueueMismatched(target);
-    }
+    const missing = new Set(unembeddedIds(profileId));
+    const queue = listVoiceSamples(profileId, "own").filter((s) => missing.has(s.id));
     let done = 0;
     while (queue.length && done < EMBED_MAX_PER_RUN) {
       const batch = queue.splice(0, EMBED_BATCH);
-      const vectors = await embed(batch.map((s) => sampleEmbeddingText(s.text)));
+      const vectors = await embed(batch.map((s) => s.text.slice(0, 2000)), { kind: "document" });
       if (!vectors || vectors.length !== batch.length) break;
       batch.forEach((s, i) => setVoiceEmbedding(s.id, vectors[i]));
       done += batch.length;
-      if (target === null && vectors[0]) {
-        target = vectors[0].length;
-        enqueueMismatched(target);
-      }
     }
     return done;
   })().finally(() => inflight.delete(profileId));
@@ -321,7 +293,7 @@ export async function analyzeVoice(profile: Profile, signal?: AbortSignal): Prom
   const extras = computeVoiceExtras(texts, { language });
 
   try {
-    await embedPending(profile.id, { verifyDims: true });
+    await embedPending(profile.id);
   } catch (err) {
     console.warn("[voice] embedding failed:", err instanceof Error ? err.message : err);
   }

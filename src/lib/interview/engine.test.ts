@@ -13,6 +13,7 @@ import {
   strengthFromCoverage,
   surprisePrompt,
   currentThread,
+  storyExtractionTranscript,
   type Decision,
 } from "./engine";
 import { EMPTY_STATE, type ActiveInterviewKind, type InterviewState, type TranscriptMessage } from "./types";
@@ -175,6 +176,28 @@ describe("story interview flow", () => {
     const cov = storyCoverage(currentThread(s.messages, s.state), s.state);
     expect(cov.find((i) => i.key === d1.target)?.status).toBe("skipped");
     expect(d2.target).not.toBe(d1.target);
+  });
+});
+
+describe("storyExtractionTranscript", () => {
+  it("drops the photo, caption, privacy and wrap exchanges and returns the privacy answer", () => {
+    const s = session("story");
+    s.open();
+    s.say("My client, the CFO, fired us in her office last Monday. I felt sick. We wanted to keep the deal. That's when I realised. I learned to talk to the board. There were 40 people on it.");
+    let d = s.say("She said it straight to my face, in a cold voice, in front of everyone.");
+    let guard = 0;
+    while (d.stage === "probe" && d.target !== "privacy" && guard++ < 10) d = s.say("Honestly I don't remember much more than that, it was a blur.");
+    expect(d.target).toBe("privacy");
+    expect(s.say("Don't name the bank, call it a Swiss bank.").stage).toBe("photo");
+    s.say("", { photos: ["p1"] });
+    s.say("Me outside their office that evening.");
+    const { messages, privacy } = storyExtractionTranscript(s.messages, s.state.meta);
+    expect(privacy).toBe("Don't name the bank, call it a Swiss bank.");
+    const text = messages.map((m) => m.content).join(" | ");
+    expect(text).not.toContain("Swiss bank");
+    expect(text).not.toContain("outside their office");
+    expect(text).not.toContain("(photo)");
+    expect(messages.some((m) => m.photoIds.length)).toBe(false);
   });
 });
 

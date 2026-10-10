@@ -16,7 +16,7 @@ export const viewport: Viewport = {
 };
 
 // Resolve the theme before first paint to avoid a flash.
-const themeScript = `(function(){try{var t=localStorage.getItem('sb-theme')||'system';var d=t==='dark'||(t==='system'&&matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.dataset.theme=d?'dark':'light';}catch(e){}})();`;
+const themeScript = `(function(){try{var r=document.documentElement,l=localStorage;var t=l.getItem('sb-theme')||'system';var d=t==='dark'||(t==='system'&&matchMedia('(prefers-color-scheme: dark)').matches);r.dataset.theme=d?'dark':'light';var g=parseInt(l.getItem('sb-glass')||'0',10);if(g)r.style.setProperty('--glass-adjust',String(Math.max(-30,Math.min(30,g))));if(l.getItem('sb-transparency')==='reduced')r.dataset.transparency='reduced';if(l.getItem('sb-contrast')==='more')r.dataset.contrast='more';}catch(e){}})();`;
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (

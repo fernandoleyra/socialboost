@@ -47,7 +47,7 @@ export const PROVIDER_KIND_HINT: Record<ProviderKind, string> = {
 /* Presets                                                             */
 /* ------------------------------------------------------------------ */
 
-export type PresetId = "recommended" | "light";
+export type PresetId = "recommended" | "light" | "multilingual" | "pro";
 
 export type Preset = {
   id: PresetId;
@@ -57,38 +57,50 @@ export type Preset = {
   routes: Partial<Record<ModelTask, { model: string; temperature?: number }>>;
 };
 
+/** Same natively multimodal model for every text task AND vision, so Ollama never swaps models mid-interview. */
+function oneModel(model: string, t: { chat: number; writer: number }, embedding: string): Preset["routes"] {
+  return {
+    interviewer: { model, temperature: t.chat },
+    extractor: { model, temperature: 0.2 },
+    writer: { model, temperature: t.writer },
+    critic: { model, temperature: 0.2 },
+    vision: { model, temperature: 0.2 },
+    embedding: { model: embedding },
+  };
+}
+
 /**
- * Local presets for Ollama. One text model for all text tasks so Ollama never swaps
- * models in the middle of an interview; a separate small vision model; a tiny embedder.
+ * Local presets for Ollama (research: docs/MODELS.md). Temperatures follow each vendor's
+ * guidance: Gemma runs at ~1.0, Qwen lower; JSON tasks stay at 0.2.
  */
 export const PRESETS: Preset[] = [
   {
     id: "recommended",
     label: "Recommended",
-    memory: "16 GB RAM or more",
-    description: "Qwen3 14B writes and interviews well; Qwen2.5-VL reads your photos.",
-    routes: {
-      interviewer: { model: "qwen3:14b", temperature: 0.7 },
-      extractor: { model: "qwen3:14b", temperature: 0.2 },
-      writer: { model: "qwen3:14b", temperature: 0.8 },
-      critic: { model: "qwen3:14b", temperature: 0.2 },
-      vision: { model: "qwen2.5vl:7b", temperature: 0.2 },
-      embedding: { model: "nomic-embed-text" },
-    },
+    memory: "16 GB RAM or 8–12 GB VRAM",
+    description: "Gemma 4 12B interviews, writes and reads your photos.",
+    routes: oneModel("gemma4:12b", { chat: 0.9, writer: 1.0 }, "embeddinggemma"),
   },
   {
     id: "light",
     label: "Light",
     memory: "8 GB RAM",
-    description: "Qwen3 4B for text and Gemma 3 4B for photos. Faster, a little less polished.",
-    routes: {
-      interviewer: { model: "qwen3:4b", temperature: 0.7 },
-      extractor: { model: "qwen3:4b", temperature: 0.2 },
-      writer: { model: "qwen3:4b", temperature: 0.8 },
-      critic: { model: "qwen3:4b", temperature: 0.2 },
-      vision: { model: "gemma3:4b", temperature: 0.2 },
-      embedding: { model: "nomic-embed-text" },
-    },
+    description: "Qwen 3.5 4B does everything. Faster, a little less polished.",
+    routes: oneModel("qwen3.5:4b", { chat: 0.7, writer: 0.8 }, "embeddinggemma"),
+  },
+  {
+    id: "multilingual",
+    label: "Multilingual",
+    memory: "16 GB RAM",
+    description: "Qwen 3.5 9B for Spanish, German, French and more, with a multilingual search model.",
+    routes: oneModel("qwen3.5:9b", { chat: 0.7, writer: 0.8 }, "qwen3-embedding:0.6b"),
+  },
+  {
+    id: "pro",
+    label: "Pro",
+    memory: "24 GB VRAM or 32 GB+ Mac",
+    description: "Muse Glimmer 30B for the most natural drafts.",
+    routes: oneModel("muse-glimmer:30b", { chat: 0.9, writer: 1.0 }, "qwen3-embedding:0.6b"),
   },
 ];
 

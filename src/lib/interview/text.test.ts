@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   cleanReply,
   detectStorySignals,
-  filterReply,
+  filterTurn,
+  isFiller,
+  takeSentences,
   isAcknowledgement,
   isDoneSignal,
   isGenericAnswer,
@@ -14,15 +16,17 @@ import {
   formatDay,
 } from "./text";
 
-async function collect(pieces: string[], opts = { singleQuestion: true, maxChars: 400 }) {
+async function collect(pieces: string[], opts: Parameters<typeof filterTurn>[1]) {
   async function* gen() {
     for (const p of pieces) yield p;
   }
   let out = "";
   let stopped = false;
-  for await (const p of filterReply(gen(), opts, () => (stopped = true))) out += p;
+  for await (const p of filterTurn(gen(), opts, () => (stopped = true))) out += p;
   return { out, stopped };
 }
+
+const Q = { mode: "question" as const, maxStatements: 1, maxChars: 400 };
 
 describe("answer classification", () => {
   it("detects done signals only in short messages", () => {
@@ -102,41 +106,59 @@ describe("keepVerbatimQuotes", () => {
   });
 });
 
-describe("reply cleaning", () => {
-  it("strips labels, markdown and wrapping quotes; keeps one question", () => {
-    expect(cleanReply('Interviewer: "**Your biggest client**, gone. Where were you? And who told you?"', { singleQuestion: true, maxChars: 400 })).toBe(
-      "Your biggest client, gone. Where were you?",
-    );
+describe("cleanReply", () => {
+  it("strips labels, markdown and wrapping quotes", () => {
+    expect(cleanReply('Interviewer: "**Your biggest client**, gone. Where were you?"')).toBe("Your biggest client, gone. Where were you?");
   });
-
-  it("keeps multi-sentence wraps when not single-question", () => {
-    const t = "Thanks, that's a great one to keep. Tap Finish & save, or tell me about another moment.";
-    expect(cleanReply(t, { singleQuestion: false, maxChars: 400 })).toBe(t);
-  });
-
   it("caps length at a sentence boundary", () => {
-    const t = "One sentence here. ".repeat(40);
-    const out = cleanReply(t, { singleQuestion: false, maxChars: 100 });
+    const out = cleanReply("One sentence here. ".repeat(40), 100);
     expect(out.length).toBeLessThanOrEqual(100);
     expect(out.endsWith(".")).toBe(true);
   });
+});
 
-  it("streams only the first question and reports the early stop", async () => {
-    const { out, stopped } = await collect(["Assistant: ", "A 40-minute silence. ", "Ouch. What did you say ", "first? And what did ", "they say?"]);
-    expect(out).toBe("A 40-minute silence. Ouch. What did you say first?");
+describe("takeSentences", () => {
+  it("splits complete sentences and keeps the unfinished tail", () => {
+    expect(takeSentences("Ouch. Where were you? And who", 0, false)).toEqual({ sentences: ["Ouch.", "Where were you?"], end: 21 });
+    expect(takeSentences("It cost 3.5 million. Then", 0, true).sentences).toEqual(["It cost 3.5 million.", "Then"]);
+    expect(takeSentences('She said "no." Then left.\nNext', 0, true).sentences).toEqual(['She said "no."', "Then left.", "Next"]);
+  });
+});
+
+describe("filterTurn", () => {
+  it("keeps one reaction and exactly one question, and stops the model", async () => {
+    const { out, stopped } = await collect(["Assistant: A 40-minute silence. ", "Ouch, that must have hurt. What did you say ", "first? And what did ", "they say?"], Q);
+    expect(out).toBe("A 40-minute silence. What did you say first?");
     expect(stopped).toBe(true);
   });
 
-  it("emits short replies that end before the hold-back window", async () => {
-    const { out } = await collect(["Where were you?"]);
-    expect(out).toBe("Where were you?");
+  it("drops filler praise and preambles", async () => {
+    const { out } = await collect(["Sure! Here's my question: ", "Great! ", "**When** did it happen", "? Tell me more."], Q);
+    expect(out).toBe("When did it happen?");
+    expect(isFiller("That's a powerful moment.")).toBe(true);
+    expect(isFiller("Flour everywhere, ovens running.")).toBe(false);
   });
 
-  it("stream output equals the final cleanup", async () => {
-    const pieces = ["Sure! Here's my question: ", "**When** did ", "it happen", "?"];
-    const { out } = await collect(pieces);
-    expect(out).toBe(cleanReply(pieces.join(""), { singleQuestion: true, maxChars: 400 }));
-    expect(out).toBe("When did it happen?");
+  it("replaces an off-target question with the fallback probe", async () => {
+    const opts = { ...Q, accept: (q: string) => /\b(who|said)\b/i.test(q), fallbackQuestion: "Who else was there?" };
+    expect((await collect(["Valencia at night, wow. How did the export go?"], opts)).out).toBe("Valencia at night, wow. Who else was there?");
+    expect((await collect(["Valencia at night. Who said that?"], opts)).out).toBe("Valencia at night. Who said that?");
+  });
+
+  it("asks the fallback when the model forgets to ask", async () => {
+    const { out } = await collect(["That sounds like a long night for everyone involved there."], { ...Q, fallbackQuestion: "What happened next?" });
+    expect(out).toBe("That sounds like a long night for everyone involved there. What happened next?");
+  });
+
+  it("statement mode never asks and stops after the allowed sentences", async () => {
+    const opts = { mode: "statement" as const, maxStatements: 1, maxChars: 300 };
+    expect((await collect(["The midnight call to Luis, with your hands shaking. Did you sleep at all?"], opts)).out).toBe("The midnight call to Luis, with your hands shaking.");
+    expect((await collect(["Thanks for sharing! What a story?"], opts)).out).toBe("");
+  });
+
+  it("free mode only cleans up", async () => {
+    const { out } = await collect(["Interviewer: Gracias. ", "¿Tienes una foto?"], { mode: "free", maxStatements: 0, maxChars: 400 });
+    expect(out).toBe("Gracias. ¿Tienes una foto?");
   });
 });
 

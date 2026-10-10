@@ -2,7 +2,18 @@ import { describe, expect, it } from "vitest";
 import { StrategySchema, type Strategy } from "@/lib/types";
 import { cadenceDays, cardToMemory, evenWeights, mergeStrategy, samePillar, tidyList, extractSummary } from "./outputs";
 import { PositioningExtractSchema, storyCardSchema } from "./schemas";
-import { coverageCheckPrompt, directorNote, interviewerMessages, interviewerSystemPrompt, languageName, mentionsPhoto, type InterviewContext } from "./prompts";
+import {
+  coverageCheckPrompt,
+  directorNote,
+  interviewerMessages,
+  interviewerSystemPrompt,
+  languageName,
+  openingMessage,
+  protocolLines,
+  questionOnTarget,
+  storyCardPrompt,
+  type InterviewContext,
+} from "./prompts";
 import type { Decision } from "./engine";
 
 const extract = (patch: Partial<ReturnType<typeof PositioningExtractSchema.parse>> = {}) => PositioningExtractSchema.parse({ ...patch });
@@ -195,9 +206,39 @@ describe("prompts", () => {
     expect(coverageCheckPrompt("positioning", "Ana", "t").user).toContain("rhythm:");
   });
 
-  it("recognises photo requests in several languages", () => {
-    expect(mentionsPhoto("Do you have a picture of that?")).toBe(true);
-    expect(mentionsPhoto("¿Tienes una foto?")).toBe(true);
-    expect(mentionsPhoto("Who else was there?")).toBe(false);
+  it("has fixed protocol lines for supported languages only", () => {
+    expect(protocolLines("en")?.photoAsk).toMatch(/photo/);
+    expect(protocolLines("es-ES")?.wrap).toContain("Finish & save");
+    expect(protocolLines("ja")).toBeNull();
+  });
+
+  it("builds deterministic English openings with the seed verbatim", () => {
+    const first = openingMessage({ ...ctx, language: "en" }, { returning: false, variant: 0 })!;
+    expect(first).toMatch(/^Hi Ivan\./);
+    expect(first.endsWith("When did you almost quit?")).toBe(true);
+    const again = openingMessage({ ...ctx, language: "en" }, { returning: true, variant: 4 })!;
+    expect(again).not.toEqual(first);
+    expect(openingMessage({ ...ctx, kind: "positioning", language: "en" }, { returning: false, variant: 0 })).toContain("LinkedIn to do for you");
+    expect(openingMessage(ctx, { returning: false, variant: 0 })).toBeNull();
+  });
+
+  it("checks that a question matches its target", () => {
+    expect(questionOnTarget("scene", "Where were you when you found out?")).toBe(true);
+    expect(questionOnTarget("people", "Where were you when you found out?")).toBe(false);
+    expect(questionOnTarget("stakes", "What could you have lost if it failed?")).toBe(true);
+    expect(questionOnTarget("rhythm", "How often could you post?")).toBe(true);
+    expect(questionOnTarget(undefined, "Anything?")).toBe(true);
+  });
+
+  it("protocol notes ask the model for a reaction only", () => {
+    const note = directorNote(ctx, { stage: "wrap", firstMessage: false, covered: [], missing: [] }, "protocol");
+    expect(note).toContain("No question");
+    expect(directorNote(ctx, { stage: "wrap", firstMessage: false, covered: [], missing: [], photoDeferred: true }, "free")).toContain("add the photo later");
+  });
+
+  it("passes the privacy note to the story extractor", () => {
+    const p = storyCardPrompt({ name: "Ana", headline: "", language: "en", pillars: [], transcript: "t", privacy: "Don't name the bank." });
+    expect(p.user).toContain("Privacy note from Ana");
+    expect(p.user).toContain("Leave out the interviewer's questions");
   });
 });
