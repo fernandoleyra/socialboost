@@ -72,7 +72,16 @@ export function updateProfile(id: string, patch: Partial<Omit<Profile, "id" | "c
 }
 
 export function deleteProfile(id: string) {
-  getDb().prepare(`DELETE FROM profiles WHERE id = ?`).run(id);
+  const db = getDb();
+  db.transaction(() => {
+    // Per-profile/per-interview state that modules keep in the settings table.
+    const interviewIds = (db.prepare(`SELECT id FROM interviews WHERE profile_id = ?`).all(id) as { id: string }[]).map((r) => r.id);
+    const del = db.prepare(`DELETE FROM settings WHERE key = ?`);
+    for (const iv of interviewIds) del.run(`interview-state:${iv}`);
+    db.prepare(`DELETE FROM settings WHERE key LIKE ? OR key LIKE ?`).run(`%.${id}`, `%:${id}`);
+    db.prepare(`DELETE FROM activity WHERE profile_id = ?`).run(id);
+    db.prepare(`DELETE FROM profiles WHERE id = ?`).run(id);
+  })();
 }
 
 /** The profile currently being worked on. Falls back to the first profile. */
