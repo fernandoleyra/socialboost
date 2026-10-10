@@ -69,7 +69,7 @@ export async function loadContext(post: Post, opts: { examplesQuery?: string } =
 }
 
 /** Inputs for linting a post without loading voice examples (cheap: used on every save). */
-export function lintInputs(post: Pick<Post, "profileId" | "memoryId" | "photoId">): { facts?: string; neverSay: string[]; stats: VoiceProfile["stats"] } {
+export function lintInputs(post: Pick<Post, "profileId" | "memoryId" | "photoId">): { facts?: string; notes?: string; neverSay: string[]; stats: VoiceProfile["stats"] } {
   const strategy = getStrategy(post.profileId);
   const profile = getProfile(post.profileId);
   const memory = post.memoryId ? getMemory(post.memoryId) : null;
@@ -88,10 +88,10 @@ export function lintInputs(post: Pick<Post, "profileId" | "memoryId" | "photoId"
         stats: voice.stats,
       })
     : undefined;
-  return { facts, neverSay: extractNeverSay(voice.manualRules), stats: voice.stats };
+  return { facts, notes: memory?.story || undefined, neverSay: extractNeverSay(voice.manualRules), stats: voice.stats };
 }
 
 export function lintForPost(post: Post, body: string): LintResult {
-  const { facts, neverSay, stats } = lintInputs(post);
-  return lintPost(body, stats, { facts, neverSay });
+  const { facts, notes, neverSay, stats } = lintInputs(post);
+  return lintPost(body, stats, { facts, notes, neverSay });
 }

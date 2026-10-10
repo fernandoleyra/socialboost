@@ -88,6 +88,9 @@ export const PositioningExtractSchema = z.object({
 });
 export type PositioningExtract = z.infer<typeof PositioningExtractSchema>;
 
+/** First finish call: everything but the pillars (kept small so slow machines stay fast). */
+export const PositioningCoreSchema = PositioningExtractSchema.omit({ pillars: true });
+
 export const PillarsOnlySchema = z.object({ pillars: z.array(ExtractedPillarSchema).default([]) });
 
 export const StoryCoverageCheckSchema = z.object({

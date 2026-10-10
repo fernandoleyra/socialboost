@@ -1,15 +1,17 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { BookOpen, Mic } from "lucide-react";
 import { EmptyState, PageHeader, Section } from "@/components/ui";
 import { PositioningCard, StoryInterviewCard } from "@/components/interview/interview-cards";
-import { getStrategy, listInterviews, requireProfile } from "@/lib/repo";
+import { getActiveProfile, getStrategy, listInterviews } from "@/lib/repo";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Interviews — SocialBoost" };
 
 export default function InterviewsPage() {
-  const profile = requireProfile();
+  const profile = getActiveProfile();
+  if (!profile) redirect("/welcome");
   const interviews = listInterviews(profile.id);
   const strategy = getStrategy(profile.id);
   const pillars = (strategy?.pillars ?? []).map((p) => ({ id: p.id, name: p.name, color: p.color }));

@@ -73,7 +73,7 @@ export const HELPER_SCRIPT = String.raw`(async function () {
     var header = el.querySelector(".update-components-header, .feed-shared-header");
     if (!header) { return true; }
     var t = (header.innerText || "").trim();
-    return !t || /posted this|hat dies gepostet|publicó esto|a publié|publicou|ha pubblicato/i.test(t);
+    return !t || /\b(?:posted this|hat dies gepostet|publicó esto|a publié|publicou|ha pubblicato)/i.test(t);
   };
 
   var textOf = function (el) {
@@ -93,21 +93,27 @@ export const HELPER_SCRIPT = String.raw`(async function () {
     return "";
   };
 
+  var COMMENTS_RE = /([\d.,]+\s*[KkMm]?)\s+(?:comments?|Kommentare?|comentarios?|commentaires?|comentários?|commenti)/i;
+  var REPOSTS_RE = /([\d.,]+\s*[KkMm]?)\s+(?:reposts?|Reposts|veces compartido|partages?|compartilhamentos?|diffusioni)/i;
+
   var countsOf = function (el) {
     var bar = el.querySelector(".social-details-social-counts");
-    var all = (el.innerText || "").replace(/ /g, " ");
+    var all = (el.innerText || "").replace(/\u00a0/g, " ");
     var im = all.match(/([\d.,]+\s*[KkMm]?)\s+(?:impressions?|Impressionen|impresiones|impressões|visualizzazioni)/i);
     if (!bar) { return { reactions: null, comments: null, reposts: null, impressions: im ? num(im[1]) : null }; }
-    var txt = (bar.innerText || "").replace(/ /g, " ");
+    var txt = (bar.innerText || "").replace(/\u00a0/g, " ");
+    var cm = txt.match(COMMENTS_RE);
+    var rp = txt.match(REPOSTS_RE);
     var reactEl = el.querySelector(".social-details-social-counts__reactions-count");
     var reactions = reactEl ? num(reactEl.innerText) : null;
     if (reactions === null) {
       var o = txt.match(/(?:and|und|y|et|e)\s+([\d.,]+\s*[KkMm]?)\s+(?:others?|weitere|otras? personas|autres?|outras? pessoas|altri)/i);
       if (o) { var v = num(o[1]); reactions = v === null ? null : v + 1; }
     }
-    if (reactions === null) { var r = txt.match(/^\s*([\d.,]+\s*[KkMm]?)\b/); reactions = r ? num(r[1]) : 0; }
-    var cm = txt.match(/([\d.,]+\s*[KkMm]?)\s+(?:comments?|Kommentare?|comentarios?|commentaires?|comentários?|commenti)/i);
-    var rp = txt.match(/([\d.,]+\s*[KkMm]?)\s+(?:reposts?|Reposts|veces compartido|partages?|compartilhamentos?|diffusioni)/i);
+    if (reactions === null) {
+      var r = txt.replace(COMMENTS_RE, "").replace(REPOSTS_RE, "").match(/^\s*([\d.,]+\s*[KkMm]?)(?![\d.,])/);
+      reactions = r ? num(r[1]) : 0;
+    }
     return { reactions: reactions, comments: cm ? num(cm[1]) : 0, reposts: rp ? num(rp[1]) : 0, impressions: im ? num(im[1]) : null };
   };
 

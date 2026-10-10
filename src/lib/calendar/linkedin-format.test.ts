@@ -128,6 +128,7 @@ describe("errors and publish markers", () => {
     expect(describeLinkedInError(503).retryable).toBe(true);
     expect(describeLinkedInError(400, "FIELD_LENGTH_TOO_LONG").message).toMatch(/too long/);
     expect(describeLinkedInError(400, "INVALID_VALUE_FOR_FIELD", "bad author").message).toBe("LinkedIn returned 400 INVALID_VALUE_FOR_FIELD: bad author");
+    expect(describeLinkedInError(422, "UNPROCESSABLE_ENTITY", "Content is a duplicate of urn:li:share:7123456789012345678").message).toMatch(/already on your profile/);
   });
 
   it("round-trips the in-flight marker", () => {

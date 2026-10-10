@@ -89,6 +89,11 @@ export function aboutBlock(ctx: PromptContext): string {
   return lines.join("\n");
 }
 
+/** Split the story into sentences (quotes stay attached to their sentence). */
+export function storyFacts(story: string): string[] {
+  return (story.replace(/\s+/g, " ").match(/(?:[^.!?]|[.,](?=\d))+(?:[.!?]+["”’')]*|$)/g) ?? []).map((x) => x.trim()).filter((x) => /[\p{L}\p{N}]/u.test(x));
+}
+
 /** The memory as interview notes. Every fact the post may use is in here. */
 export function storyBlock(ctx: PromptContext): string {
   const m = ctx.memory;
@@ -97,7 +102,8 @@ export function storyBlock(ctx: PromptContext): string {
   if (m.when) lines.push(`${L.when} ${m.when}`);
   if (m.place) lines.push(`${L.where} ${m.place}`);
   if (list(m.people).length) lines.push(`${L.people} ${list(m.people).join(", ")}`);
-  lines.push(`${L.happened}\n${clip(m.story || m.summary, 3500)}`);
+  // One fact per line instead of a ready-made paragraph: small models copy prose verbatim.
+  lines.push(`${L.happened}\n${storyFacts(clip(m.story || m.summary, 3500)).map((f) => `- ${f}`).join("\n")}`);
   if (list(m.details, 12).length) lines.push(`${L.details}\n${list(m.details, 12).map((d) => `- ${d}`).join("\n")}`);
   if (list(m.quotes, 6).length) lines.push(`${L.quotes}\n${list(m.quotes, 6).map((q) => `- "${q.replace(/^["“]|["”]$/g, "")}"`).join("\n")}`);
   if (list(m.emotions, 5).length) lines.push(`${L.felt} ${list(m.emotions, 5).join(", ")}`);
@@ -166,8 +172,23 @@ function dashRule(stats: VoiceStats | null): string {
   return "Do not use em dashes (—) or en dashes (–). Use a period or a comma instead.";
 }
 
-/** Numbered hard rules. Kept short: small models follow ~12 rules, not 40. */
-export function writingRules(ctx: PromptContext, structure: Structure | null): string[] {
+/** Whether a post already has a numbered list (two or more "1." / "2)" lines). */
+export function hasNumberedList(body: string): boolean {
+  return (body.match(/^\s*\d{1,2}[.)]\s+\S/gm) ?? []).length >= 2;
+}
+
+function formattingRule(structure: Structure | null, keepList: boolean): string {
+  if (structure?.usesList) return "Plain text only: no markdown, no bold, no headings. Use a numbered list (1. 2. 3.) only for the list part of the structure, never bullet symbols.";
+  if (keepList) return "Plain text only: no markdown, no bold, no headings, no bullet symbols. Keep the numbered list (1. 2. 3.) the post already has.";
+  return "Plain text only: no markdown, no bold, no headings, no lists, no bullet symbols.";
+}
+
+/**
+ * Numbered hard rules. Kept short: small models follow ~12 rules, not 40.
+ * `keepList`: a rewrite of a post that already has a numbered list keeps it (a "no lists" rule
+ * would make small models flatten it on every revision).
+ */
+export function writingRules(ctx: PromptContext, structure: Structure | null, opts: { keepList?: boolean } = {}): string[] {
   const s = ctx.stats;
   const words = structure ? targetWords(ctx, structure) : null;
   const rules = [
@@ -178,9 +199,7 @@ export function writingRules(ctx: PromptContext, structure: Structure | null): s
     `Write as me, ${firstName(ctx.author.name)}, in first person ("I"). Sound like I talk, not like a press release.`,
     "The first line is the hook: one concrete sentence under 140 characters with a real detail (a time, a place, a number or exact words). Do not open with a question.",
     "Paragraphs of 1 to 3 sentences with one blank line between them. Mix short and long sentences. Never more than 3 one-line paragraphs in a row.",
-    structure?.usesList
-      ? "Plain text only: no markdown, no bold, no headings. Use a numbered list (1. 2. 3.) only for the list part of the structure, never bullet symbols."
-      : "Plain text only: no markdown, no bold, no headings, no lists, no bullet symbols.",
+    formattingRule(structure, !!opts.keepList),
     `${emojiRule(s)} ${hashtagRule(s)}`,
     dashRule(s),
     'Never write "it\'s not X, it\'s Y", "not just X, but Y", or lists of three adjectives.',
@@ -342,7 +361,13 @@ export function presetInstruction(id: RevisePresetId, strategy: Strategy | null)
   return p.instruction;
 }
 
+/** Whether the requested changes ask to get rid of a list ("Remove list", "turn the list into prose"). */
+function asksToRemoveList(changes: string[]): boolean {
+  return changes.some((c) => /\b(?:remove|drop|cut|no|without|get rid of|turn)\b[^.\n]{0,40}\blists?\b/i.test(c));
+}
+
 export function revisePrompt(ctx: PromptContext, body: string, changes: string[]): Prompt {
+  const keepList = hasNumberedList(body) && !asksToRemoveList(changes);
   const task = [
     "Here is the current post:",
     L.postOpen,
@@ -358,7 +383,7 @@ export function revisePrompt(ctx: PromptContext, body: string, changes: string[]
     voiceSection(ctx),
     "",
     L.rules,
-    numbered(writingRules(ctx, null)),
+    numbered(writingRules(ctx, null, { keepList })),
     "",
     "Write the new version now. Output only the post text.",
   ];
@@ -441,7 +466,7 @@ export function critiquePrompt(ctx: PromptContext, body: string, lint: LintIssue
     "Be strict: a typical LinkedIn post scores 5. Give 8 or more only when it is genuinely good. Lower humanness by 1 for each automatic check above.",
     "If the draft mostly repeats the notes sentence by sentence, without a short hook and a clear shape, give hook and humanness 4 or less.",
     'issues: up to 5 problems. Quote the exact words in quotes, then say what is wrong. Numbers and quotes were already checked automatically; write Invented: "<the words>" only for a fact that is clearly not in the notes.',
-    'suggestions: up to 4 specific edits, one sentence each, saying what to change and how, e.g. Replace "a lot of money" with the real amount from the notes.',
+    'suggestions: up to 4 specific edits, one sentence each, saying what to change and how, e.g. Replace "a lot of money" with the real amount from the notes. Every edit must make the post plainer, more specific or more like the author. Never suggest more formal or more polished wording.',
   );
   return {
     system: "You are a strict LinkedIn editor. You check a ghostwritten draft against the real notes and the author's voice. You are honest, specific and brief.",

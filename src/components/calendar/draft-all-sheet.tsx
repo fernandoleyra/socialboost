@@ -90,13 +90,18 @@ export function DraftAllSheet({ open, posts, timezone, onClose, onFinished }: { 
       footer={
         running ? (
           <Button variant="destructive" onClick={stop}>
-            Stop after this one
+            Stop
           </Button>
         ) : finished ? (
           <>
             <Button variant="plain" onClick={close}>
               Close
             </Button>
+            {succeeded < posts.length && (
+              <Button variant="glass" onClick={start}>
+                Try the other {posts.length - succeeded} again
+              </Button>
+            )}
             {succeeded > 0 && (
               <Link href="/studio" className="btn btn-primary">
                 Review in the Studio
@@ -148,7 +153,7 @@ export function DraftAllSheet({ open, posts, timezone, onClose, onFinished }: { 
                     )}
                   </span>
                   <div className="min-w-0 flex-1">
-                    <div className="t-subhead font-medium line-clamp-1">{p.memoryTitle ?? p.hook ?? "Planned post"}</div>
+                    <div className="t-subhead font-medium line-clamp-1">{p.memoryTitle || p.hook || "Planned post"}</div>
                     <div className="t-caption text-label-2">
                       {formatWhen(p.at, timezone, LOCALE)}
                       {s.status === "done" && s.score !== null && s.score !== undefined && ` · quality ${s.score}`}

@@ -38,7 +38,17 @@ export type CalendarPost = {
   reposts: number | null;
 };
 
-export type LinkedInStatus = { connected: boolean; name: string; picture: string; expired: boolean; expiringSoon: boolean; daysLeft: number; expiresAt: string | null };
+export type LinkedInStatus = {
+  connected: boolean;
+  name: string;
+  picture: string;
+  expired: boolean;
+  expiringSoon: boolean;
+  daysLeft: number;
+  expiresAt: string | null;
+  /** Scheduled posts whose time falls after the token expires (they'd silently turn into reminders). */
+  scheduledAfterExpiry: number;
+};
 
 export type CalendarData = {
   timezone: string;
@@ -48,6 +58,8 @@ export type CalendarData = {
   to: DayKey;
   posts: CalendarPost[];
   unscheduled: CalendarPost[];
+  /** Posts whose time has come (due, or an unconfirmed publish), whatever range is shown. */
+  due: CalendarPost[];
   slots: Slot[];
   cadence: { days: number[]; postingDays: number[]; time: string; postsPerWeek: number; note: string | null };
   pillars: CalendarPillar[];

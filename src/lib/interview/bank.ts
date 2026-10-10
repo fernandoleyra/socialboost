@@ -154,10 +154,6 @@ export function allStoryPrompts(): (StoryPrompt & { themeId: string })[] {
   return STORY_THEMES.flatMap((t) => t.prompts.map((p) => ({ ...p, themeId: t.id })));
 }
 
-export function themeById(id: string | null | undefined): StoryTheme | undefined {
-  return id ? STORY_THEMES.find((t) => t.id === id) : undefined;
-}
-
 /** Theme a prompt text belongs to (for showing the theme name next to a stored seed). */
 export function themeOfPrompt(text: string): StoryTheme | undefined {
   const norm = text.trim().toLowerCase();
@@ -179,7 +175,7 @@ export const STORY_ELEMENTS: StoryElement[] = [
     hint: "When and where it happened",
     goal: "when it happened and where exactly they were",
     probes: [
-      { id: "F02", text: "When was this, roughly? And where exactly were you?" },
+      { id: "F02", text: "When was this, roughly, and where exactly were you?" },
       { id: "F04", text: "If we were filming that moment, what would the camera see?" },
     ],
   },
@@ -190,7 +186,7 @@ export const STORY_ELEMENTS: StoryElement[] = [
     goal: "who else was there and what was actually said",
     probes: [
       { id: "F03", text: "Who else was there?" },
-      { id: "F05", text: "What exactly did they say? And what did you say back?" },
+      { id: "F05", text: "What exactly did they say, and what did you say back?" },
     ],
   },
   {
@@ -210,7 +206,7 @@ export const STORY_ELEMENTS: StoryElement[] = [
     hint: "The moment it changed",
     goal: "the exact moment things changed or clicked",
     probes: [
-      { id: "F10", text: "When exactly did it click or change? Describe those few seconds." },
+      { id: "F10", text: "What was the exact moment it clicked or changed?" },
       { id: "F11", text: "Before this, what did you believe or do that's the opposite of now?" },
     ],
   },
@@ -220,7 +216,7 @@ export const STORY_ELEMENTS: StoryElement[] = [
     hint: "Numbers, objects, sounds",
     goal: "a concrete detail: a number, an object, a sound, or what was on a screen",
     probes: [
-      { id: "F12", text: "How much, how many, how long? What were the numbers before and after?" },
+      { id: "F12", text: "What were the numbers: how much, how many, or how long, before and after?" },
       { id: "F04", text: "What could you see or hear around you right then?" },
     ],
   },

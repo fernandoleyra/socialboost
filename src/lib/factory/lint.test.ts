@@ -250,6 +250,12 @@ describe("extractNeverSay", () => {
   it("pulls quoted terms from negative rules only", () => {
     expect(extractNeverSay(['Never say "synergy"', "Avoid 'folks' and 'peeps'", 'I like "short posts"'])).toEqual(["synergy", "folks", "peeps"]);
   });
+
+  it("doesn't mistake apostrophes for quote marks", () => {
+    expect(extractNeverSay(["Don't say 'folks'", 'I don\'t use "leverage"', "I'd never write 'humbled'", "Don’t write ‘circle back’"])).toEqual(["folks", "leverage", "humbled", "circle back"]);
+    expect(extractNeverSay(["Never say 'don't hesitate'"])).toEqual(["don't hesitate"]);
+    expect(extractNeverSay(["I don't use emojis"])).toEqual([]);
+  });
 });
 
 describe("extractNumbers", () => {
@@ -290,5 +296,23 @@ Agree? ♻️ Repost to help your network.
     expect(rules("We sold to banks, retail chains and family companies across Europe.")).not.toContain("triplet");
     expect(rules("The Navier–Stokes equations stayed unsolved.")).not.toContain("em-dash");
     expect(rules("Fast, cheap, and simple. Kind, sharp, and calm.")).toContain("triplet");
+  });
+});
+
+describe("copied notes", () => {
+  const notes = "It was a Tuesday in March, 7:40 in the morning, in our Basel office. I had promised the client's COO a working prototype by 8:00. The export kept timing out after 30 seconds and I had no idea why. I had been stuck for an hour, alone with a cold coffee, too proud to ask anyone.";
+  it("flags a draft that pastes the notes back", () => {
+    const hit = lintPost(notes, null, { notes }).issues.find((i) => i.rule === "copied-notes");
+    expect(hit?.severity).toBe("error");
+  });
+  it("accepts a retelling", () => {
+    const retold = "7:40 on a Tuesday, Basel. Nine minutes to a demo and the export keeps dying after 30 seconds.\n\nI had been stuck for an hour with a cold coffee, too proud to ask anyone for help with it.\n\nThen Marta walked in and asked one question that fixed everything in four minutes.";
+    expect(lintPost(retold, null, { notes }).issues.map((i) => i.rule)).not.toContain("copied-notes");
+  });
+});
+
+describe("sentence splitting", () => {
+  it("does not treat decimals as sentence ends", () => {
+    expect(rules("Revenue grew 2.5x in a year and margins held at 31.4% the whole time.")).not.toContain("triplet");
   });
 });

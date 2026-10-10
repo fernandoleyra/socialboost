@@ -4,7 +4,6 @@ import {
   applyUserTurn,
   decideNext,
   depthScore,
-  isSingleQuestionStage,
   neediestPillar,
   planStoryInterview,
   positioningCoverage,
@@ -13,6 +12,7 @@ import {
   strengthFromCoverage,
   surprisePrompt,
   currentThread,
+  isFinishingReply,
   storyExtractionTranscript,
   type Decision,
 } from "./engine";
@@ -83,7 +83,6 @@ describe("story interview flow", () => {
       }
     }
     expect(d.stage).toBe("photo");
-    expect(isSingleQuestionStage(d.stage)).toBe(true);
   });
 
   it("asks a privacy question before the photo when people are involved", () => {
@@ -150,6 +149,26 @@ describe("story interview flow", () => {
     const close = s.say("ok thanks");
     expect(close.stage).toBe("closing");
     expect(s.state.threadStarts).toHaveLength(0);
+  });
+
+  it("treats a plain 'no' or a bare photo after the wrap as done, not as a new story", () => {
+    for (const reply of ["no", "Nope, all good.", "no thanks", "not now"]) {
+      const s = session("story");
+      s.open();
+      s.say("Our first hire quit after one week.");
+      s.say("done");
+      s.say("no photo", {});
+      expect(s.say(reply).stage).toBe("closing");
+      expect(s.state.threadStarts).toHaveLength(0);
+    }
+    const s = session("story");
+    s.open();
+    s.say("Our first hire quit after one week.");
+    s.say("done");
+    s.say("no photo", {});
+    expect(s.say("", { photos: ["ph_9"] }).stage).toBe("closing");
+    expect(s.state.threadStarts).toHaveLength(0);
+    expect(isFinishingReply("No one believed me when I said we'd ship in May.")).toBe(false);
   });
 
   it("asks for a specific instance after a generic answer, once", () => {
@@ -220,6 +239,15 @@ describe("positioning flow", () => {
     expect(seen.size).toBe(POSITIONING_AREAS.length);
     expect(depthScore(positioningCoverage(s.messages, s.state))).toBe(1);
     expect(s.say("thanks").stage).toBe("closing");
+  });
+
+  it("closes on a plain 'no' after the wrap instead of asking again", () => {
+    const s = session("positioning");
+    s.open();
+    s.say("I want inbound from CFOs at mid-size Swiss companies who are curious about AI.");
+    expect(s.say("that's it").stage).toBe("pos-wrap");
+    expect(s.say("Also: I never post about politics.").stage).toBe("pos-followup");
+    expect(s.say("no").stage).toBe("closing");
   });
 
   it("asks for an example after a very short answer", () => {

@@ -90,44 +90,82 @@ export function parseLooseDate(raw: string | null | undefined): string | null {
 
 export type ParsedMetricsCsv = { rows: MetricsRow[]; headers: string[]; errors: string[] };
 
+type ColumnKey = keyof typeof ALIASES;
+type ColumnMap = Record<ColumnKey, number>;
+const COLUMN_KEYS = Object.keys(ALIASES) as ColumnKey[];
+
+/**
+ * Column positions per table in a header row. LinkedIn's TOP POSTS sheet puts two tables side by
+ * side (top posts by engagements, top posts by impressions), each with its own URL column, and the
+ * same line holds two different posts. So every URL column starts a table of its own; columns
+ * before the first URL column belong to the first table.
+ */
+function tablesIn(header: string[]): ColumnMap[] {
+  const h = header.map((c) => norm(String(c)));
+  const urlCols = h.flatMap((x, i) => (ALIASES.url.includes(x) ? [i] : []));
+  const bounds = urlCols.length > 1 ? urlCols.map((start, k) => [k === 0 ? 0 : start, urlCols[k + 1] ?? h.length]) : [[0, h.length]];
+  return bounds
+    .map(([from, to]) => {
+      const map = Object.fromEntries(COLUMN_KEYS.map((k) => [k, -1])) as ColumnMap;
+      for (let i = from; i < to; i++) {
+        const key = COLUMN_KEYS.find((k) => ALIASES[k].includes(h[i]));
+        if (key && map[key] < 0) map[key] = i;
+      }
+      return map;
+    })
+    .filter((m) => [m.impressions, m.reactions, m.comments, m.reposts].some((x) => x >= 0) && (m.url >= 0 || m.date >= 0));
+}
+
+const METRIC_KEYS = ["impressions", "reactions", "comments", "reposts"] as const;
+
 export function parseMetricsCsv(csv: string): ParsedMetricsCsv {
   const text = csv.replace(/^﻿/, "");
   const parsed = Papa.parse<string[]>(text, { skipEmptyLines: "greedy" });
   const all = parsed.data.filter((r) => Array.isArray(r) && r.some((c) => String(c).trim()));
   const errors: string[] = [];
-  // The header is the first row (within the first 10) that names at least one metric column.
+  // The header is the first row (within the first 10) that names a URL or date column and at least one metric column.
   let headerAt = -1;
-  let idx: Record<keyof typeof ALIASES, number> | null = null;
+  let tables: ColumnMap[] = [];
   for (let i = 0; i < Math.min(10, all.length); i++) {
-    const h = all[i].map((c) => norm(String(c)));
-    const found = Object.fromEntries(Object.entries(ALIASES).map(([k, aliases]) => [k, h.findIndex((x) => aliases.includes(x))])) as Record<keyof typeof ALIASES, number>;
-    const metricCols = [found.impressions, found.reactions, found.comments, found.reposts].filter((x) => x >= 0).length;
-    if (metricCols > 0 && (found.url >= 0 || found.date >= 0)) {
+    const found = tablesIn(all[i]);
+    if (found.length) {
       headerAt = i;
-      idx = found;
+      tables = found;
       break;
     }
   }
-  if (!idx || headerAt < 0) {
+  if (headerAt < 0) {
     errors.push("Couldn't find the header row. It needs a post URL or date column and at least one of: impressions, reactions, comments, reposts.");
     return { rows: [], headers: all[0]?.map(String) ?? [], errors };
   }
   const cell = (r: string[], i: number) => (i >= 0 ? String(r[i] ?? "").trim() : "");
   const rows: MetricsRow[] = [];
+  // Side-by-side tables can list the same post twice: merge those by post id, never by line.
+  const byPost = new Map<string, MetricsRow>();
   for (let i = headerAt + 1; i < all.length; i++) {
     const r = all[i];
-    const row: MetricsRow = {
-      line: i + 1,
-      url: cell(r, idx.url) || null,
-      date: cell(r, idx.date) || null,
-      impressions: parseCount(cell(r, idx.impressions)),
-      reactions: parseCount(cell(r, idx.reactions)),
-      comments: parseCount(cell(r, idx.comments)),
-      reposts: parseCount(cell(r, idx.reposts)),
-    };
-    if (!row.url && !row.date) continue;
-    if (row.impressions === null && row.reactions === null && row.comments === null && row.reposts === null) continue;
-    rows.push(row);
+    for (const idx of tables) {
+      const row: MetricsRow = {
+        line: i + 1,
+        url: cell(r, idx.url) || null,
+        date: cell(r, idx.date) || null,
+        impressions: parseCount(cell(r, idx.impressions)),
+        reactions: parseCount(cell(r, idx.reactions)),
+        comments: parseCount(cell(r, idx.comments)),
+        reposts: parseCount(cell(r, idx.reposts)),
+      };
+      if (!row.url && !row.date) continue;
+      if (METRIC_KEYS.every((k) => row[k] === null)) continue;
+      const postKey = tables.length > 1 && row.url ? (extractPostIds(row.url)[0] ?? row.url) : null;
+      const seen = postKey ? byPost.get(postKey) : undefined;
+      if (seen) {
+        for (const k of METRIC_KEYS) if (seen[k] === null) seen[k] = row[k];
+        if (!seen.date) seen.date = row.date;
+        continue;
+      }
+      if (postKey) byPost.set(postKey, row);
+      rows.push(row);
+    }
   }
   if (!rows.length) errors.push("The file has a header but no rows with numbers.");
   return { rows, headers: all[headerAt].map(String), errors };

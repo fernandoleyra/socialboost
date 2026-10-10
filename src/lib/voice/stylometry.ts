@@ -99,7 +99,7 @@ const firstWords = (line: string, n: number) => wordsOf(line).slice(0, n);
 /** A phrase ending on one of these is a fragment of a longer one ("do you see the"). */
 const DANGLING = new Set(["the", "a", "an", "of", "to", "in", "on", "at", "for", "with", "and", "or", "but", "my", "your", "our", "this", "that"]);
 
-function commonOpeners(texts: string[]): string[] {
+function commonOpeners(texts: string[], language?: string | null): string[] {
   const tally: Tally = new Map();
   for (const t of texts) {
     const seen = new Set<string>();
@@ -109,10 +109,10 @@ function commonOpeners(texts: string[]): string[] {
       if (w.length === n) tallyOncePerPost(tally, seen, w, n);
     }
   }
-  return pickPhrases(tally, minDocs(texts.length), 5, () => true);
+  return pickPhrases(tally, minDocs(texts.length), 5, (key, v) => !carriesFacts(key, v.display, stopwords(language)));
 }
 
-function commonClosers(texts: string[]): string[] {
+function commonClosers(texts: string[], language?: string | null): string[] {
   const tally: Tally = new Map();
   for (const t of texts) {
     const seen = new Set<string>();
@@ -124,13 +124,25 @@ function commonClosers(texts: string[]): string[] {
     if (finalWords.length > 0 && finalWords.length <= 6) tallyOncePerPost(tally, seen, finalWords, Math.max(2, finalWords.length));
     for (const n of [2, 3, 4]) if (finalWords.length > n) tallyOncePerPost(tally, seen, finalWords.slice(0, n), n);
   }
-  return pickPhrases(tally, minDocs(texts.length), 5, (key) => !DANGLING.has(key.split(" ").pop() ?? ""));
+  return pickPhrases(tally, minDocs(texts.length), 5, (key, v) => !DANGLING.has(key.split(" ").pop() ?? "") && !carriesFacts(key, v.display, stopwords(language)));
 }
 
 const DETERMINERS = new Set(["the", "a", "an", "this", "that", "these", "those", "my", "our", "your", "their", "his", "her", "its"]);
 const PREPOSITIONS = new Set(["in", "on", "at", "for", "with", "from", "to", "of", "by", "about", "into", "over", "after", "before"]);
 const NUMBER_WORDS = new Set(["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "twenty", "thirty", "fifty", "hundred", "thousand", "million"]);
 const PRONOUN_I = /^i(?:['’](?:m|ve|d|ll))?$/i;
+
+/**
+ * Phrases the writer may reuse must not smuggle in facts from old posts: quantities ("two years",
+ * "40,000"), names, places and acronyms ("in Hamburg", "AI"). The first word may be capitalised.
+ */
+function carriesFacts(key: string, display: string, stop: Set<string>): boolean {
+  const toks = key.split(" ");
+  const shown = display.split(" ");
+  if (toks.some((x) => /^\d/.test(x))) return true;
+  if (shown.slice(1).some((x) => /\p{Lu}/u.test(x) && !PRONOUN_I.test(x)) || /^\p{Lu}{2,}/u.test(shown[0])) return true;
+  return toks.some((x, i) => NUMBER_WORDS.has(x) && i + 1 < toks.length && !stop.has(toks[i + 1]));
+}
 
 /**
  * Verbal habits ("And one more", "I think", "by feel"). They live at sentence edges and in
@@ -155,10 +167,7 @@ function signaturePhrases(texts: string[], language?: string | null): string[] {
   const threshold = minDocs(texts.length);
   return pickPhrases(tally, threshold, 6, (key, v) => {
     const toks = key.split(" ");
-    const shown = v.display.split(" ");
-    if (toks.some((x) => /^\d/.test(x))) return false;
-    if (shown.slice(1).some((x) => /\p{Lu}/u.test(x) && !PRONOUN_I.test(x)) || /^\p{Lu}{2,}/u.test(shown[0])) return false;
-    if (toks.some((x, i) => NUMBER_WORDS.has(x) && i + 1 < toks.length && !stop.has(toks[i + 1]))) return false;
+    if (carriesFacts(key, v.display, stop)) return false;
     if (DANGLING.has(toks[toks.length - 1])) return false;
     if (v.n === 2 && (DETERMINERS.has(toks[0]) || PREPOSITIONS.has(toks[0]))) return false;
     if (v.n === 3 && PREPOSITIONS.has(toks[0]) && DETERMINERS.has(toks[1])) return false;
@@ -254,8 +263,8 @@ export function computeVoiceStats(texts: string[], opts: Opts = {}): VoiceStats 
       .sort((a, b) => b[1] - a[1])
       .slice(0, 6)
       .map(([e]) => e),
-    commonOpeners: commonOpeners(posts),
-    commonClosers: commonClosers(posts),
+    commonOpeners: commonOpeners(posts, opts.language),
+    commonClosers: commonClosers(posts, opts.language),
     signaturePhrases: signaturePhrases(posts, opts.language),
   };
 }

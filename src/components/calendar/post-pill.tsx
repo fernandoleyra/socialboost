@@ -9,8 +9,12 @@ import { PillarDot, StateIcon, photoUrl, pillarById, toneOf } from "./helpers";
 
 export const DRAG_TYPE = "application/x-socialboost-post";
 
+/**
+ * Whether a pill can be dragged. "verify" posts may already be live: moving one re-queues it, so
+ * that only happens from the post sheet, next to the "check LinkedIn first" note.
+ */
 export function isMovable(post: CalendarPost): boolean {
-  return post.state !== "published" && post.state !== "publishing";
+  return post.state !== "published" && post.state !== "publishing" && post.state !== "verify";
 }
 
 type PillProps = {
@@ -58,7 +62,12 @@ export function CompactPill({ post, pillars, onOpen, onDragStart, onDragEnd }: P
       <StateIcon state={post.state} className="size-3" />
       {post.time && <span className="shrink-0 font-semibold tabular-nums text-label-2">{post.time}</span>}
       <span className="min-w-0 flex-1 truncate font-medium text-label">{post.hook || "Untitled post"}</span>
-      {!post.photoId && post.state !== "published" && <Camera className="size-3 shrink-0 text-sys-orange" aria-label="Needs a photo" />}
+      {post.photoId ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={photoUrl(post.photoId)} alt="" loading="lazy" draggable={false} className="hidden size-4 shrink-0 rounded-[4px] object-cover lg:block" />
+      ) : (
+        post.state !== "published" && <Camera className="size-3 shrink-0 text-sys-orange" aria-label="Needs a photo" />
+      )}
     </button>
   );
 }

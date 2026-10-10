@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { ArrowUpRight, CalendarClock, CalendarX2, Camera, CircleAlert, Copy, Download, ExternalLink, Library, Link2, RotateCcw, Send, Sparkles } from "lucide-react";
+import { ArrowUpRight, CalendarClock, CalendarX2, Camera, CircleAlert, Copy, Download, ExternalLink, Library, Link2, MessageSquare, RotateCcw, Send, Sparkles } from "lucide-react";
 import { Button, Chip, Field, Input, Sheet, Typing, api, cx, toast } from "@/components/ui";
 import type { CalendarData, CalendarPost } from "@/lib/calendar/types";
 import { linkedinComposerUrl } from "@/lib/calendar/linkedin-format";
@@ -181,9 +181,10 @@ export function PostSheet({ post, data, profile, onClose, onMove, onChanged }: P
   };
 
   const openLinkedIn = async () => {
-    await copyText(post.body);
+    // Start the copy while this tab still has focus, and open the tab inside the click so popup blockers allow it.
+    const copying = copyText(post.body);
     window.open(linkedinComposerUrl(post.body), "_blank", "noopener,noreferrer");
-    toast("Text copied. If LinkedIn's box is empty, paste it.", "info");
+    toast((await copying) ? "Text copied. If LinkedIn's box is empty, paste it." : "LinkedIn opened. Copy the text here if the box is empty.", "info");
   };
 
   const draftNow = async () => {
@@ -271,6 +272,7 @@ export function PostSheet({ post, data, profile, onClose, onMove, onChanged }: P
           <div className="space-y-3">
             {post.state === "due" && (
               <>
+                <p className="t-footnote text-label-2">Post it when you have 15 minutes to answer the first comments.</p>
                 <div className="flex flex-wrap gap-2">
                   <Button variant="primary" onClick={openLinkedIn} icon={<ExternalLink className="size-4" />}>
                     Open LinkedIn
@@ -366,6 +368,13 @@ export function PostSheet({ post, data, profile, onClose, onMove, onChanged }: P
               )}
             </div>
           </div>
+
+          {post.state === "published" && post.at && Date.now() - Date.parse(post.at) < 3 * 3600_000 && (
+            <Callout tone="blue" icon={<MessageSquare />}>
+              <p className="font-semibold">Stay close for the first hour.</p>
+              <p className="text-label-2">Reply to early comments with a follow-up question rather than a thank-you. Conversation in the first hour is what carries a post further.</p>
+            </Callout>
+          )}
 
           {post.state === "published" && (
             <section className="space-y-3">

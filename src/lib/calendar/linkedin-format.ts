@@ -207,6 +207,14 @@ export function describeLinkedInError(status: number, code?: string | null, deta
   }
   if (status === 429) return { message: "LinkedIn's rate limit was hit.", hint: "Try again in a few minutes.", reconnect: false, retryable: true };
   if (code === "FIELD_LENGTH_TOO_LONG") return { message: "LinkedIn says the post is too long.", hint: "Shorten it below 3,000 characters.", reconnect: false, retryable: false };
+  if (/duplicate/i.test(`${code ?? ""} ${d}`)) {
+    return {
+      message: "LinkedIn says this exact text is already on your profile.",
+      hint: "Check your feed. If the post is there, mark it as posted; otherwise change a word and try again.",
+      reconnect: false,
+      retryable: false,
+    };
+  }
   if (status >= 500) return { message: `LinkedIn had a problem on their side (${status}).`, hint: "Try again in a few minutes.", reconnect: false, retryable: true };
   return { message: `LinkedIn returned ${status}${code ? ` ${code}` : ""}${d ? `: ${d}` : "."}`, reconnect: false, retryable: false };
 }

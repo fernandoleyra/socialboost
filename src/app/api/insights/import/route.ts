@@ -8,7 +8,8 @@ export const dynamic = "force-dynamic";
 
 const Body = z.object({
   csv: z.string().min(1, "The file is empty.").max(5_000_000, "That file is too large. Export only the posts sheet."),
-  dryRun: z.boolean().default(true),
+  /** true = only report what would match. */
+  dryRun: z.boolean().default(false),
 });
 
 /**

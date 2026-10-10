@@ -1,4 +1,5 @@
 import "server-only";
+import { authEnabled, icsKey as gateIcsKey, safeEqual } from "@/lib/auth";
 import { getDb, logActivity } from "@/lib/db";
 import { HttpError } from "@/lib/http";
 import { getSetting, setSetting } from "@/lib/settings";
@@ -9,9 +10,9 @@ import type { Post, Strategy } from "@/lib/types";
 import { buildIcs, type IcsEvent } from "./ics";
 import { computeInsights, type Insights, type InsightPillar } from "./insights";
 import { LINKEDIN_MAX_CHARS, PUBLISHING_MARKER, publishingSince, STALE_PUBLISH_MS } from "./linkedin-format";
-import { matchMetricsRows, parseMetricsCsv, type MetricsMiss } from "./metrics-import";
-import { planCalendar, planMessages, type PlanGap } from "./plan";
-import { DEFAULT_CADENCE, cadenceNote, cadenceSlots, cadenceTime, markTaken, postingDays, type Cadence, type Slot } from "./slots";
+import { matchMetricsRows, parseMetricsCsv } from "./metrics-import";
+import { planCalendar, planMessages } from "./plan";
+import { DEFAULT_CADENCE, cadenceNote, cadenceSlots, cadenceTime, markTaken, postingDays, type Cadence } from "./slots";
 import { addDays, dayKeyOf, isDayKey, parseDbDate, safeTimezone, startOfDayUtc, timeOf, type DayKey } from "./time";
 import { STATE_META, displayState, visibleError } from "./view";
 import type { CalendarData, CalendarPillar, CalendarPost, ImportPreview, LinkedInStatus, PlanPreview } from "./types";
@@ -79,10 +80,12 @@ function pillarsOf(strategy: Strategy | null): CalendarPillar[] {
   return (strategy?.pillars ?? []).map((p) => ({ id: p.id, name: p.name, color: p.color, weight: p.weight }));
 }
 
-export function linkedinStatus(profileId: string): LinkedInStatus {
+export function linkedinStatus(profileId: string, posts: Post[] = []): LinkedInStatus {
   const a = getLinkedInAccount(profileId);
-  if (!a) return { connected: false, name: "", picture: "", expired: false, expiringSoon: false, daysLeft: 0, expiresAt: null };
-  return { connected: true, name: a.name, picture: a.picture, expired: a.expired, expiringSoon: a.expiringSoon, daysLeft: a.daysLeft, expiresAt: a.expiresAt };
+  if (!a) return { connected: false, name: "", picture: "", expired: false, expiringSoon: false, daysLeft: 0, expiresAt: null, scheduledAfterExpiry: 0 };
+  const expires = Date.parse(a.expiresAt);
+  const scheduledAfterExpiry = posts.filter((p) => p.status === "scheduled" && p.scheduledAt && Date.parse(p.scheduledAt) > expires).length;
+  return { connected: true, name: a.name, picture: a.picture, expired: a.expired, expiringSoon: a.expiringSoon, daysLeft: a.daysLeft, expiresAt: a.expiresAt, scheduledAfterExpiry };
 }
 
 function memoryTitleMap(profileId: string): Map<string, string> {
@@ -138,12 +141,17 @@ export function getCalendarData(profile: Profile, range: { from: DayKey; to: Day
     to: range.to,
     posts: inRange.map((p) => toCalendarPost(p, tz, titles, now)).sort((a, b) => (a.at ?? "").localeCompare(b.at ?? "")),
     unscheduled: unscheduled.map((p) => toCalendarPost(p, tz, titles, now)),
+    due: all
+      .filter((p) => p.status === "scheduled" || p.status === "approved")
+      .map((p) => toCalendarPost(p, tz, titles, now))
+      .filter((p) => p.state === "due" || p.state === "verify")
+      .sort((a, b) => (a.at ?? "").localeCompare(b.at ?? "")),
     slots,
     cadence: { days: cadence.days, postingDays: postingDays(cadence), time: cadenceTime(cadence), postsPerWeek: cadence.postsPerWeek, note: cadenceNote(cadence) },
     pillars: pillarsOf(strategy),
     hasStrategy: !!strategy,
-    linkedin: linkedinStatus(profile.id),
-    icsPath: `/api/calendar/ics?profile=${encodeURIComponent(profile.id)}&key=${icsKey(profile.id)}`,
+    linkedin: linkedinStatus(profile.id, all),
+    icsPath: icsPath(profile.id),
   };
 }
 
@@ -258,20 +266,29 @@ export function planFor(profile: Profile, opts: { weeks: number; dryRun: boolean
 
 const icsSettingKey = (profileId: string) => `calendar:ics:${profileId}`;
 
-export function icsKey(profileId: string, rotate = false): string {
+/** The profile's own feed secret (rotatable from the Subscribe sheet). */
+export function icsToken(profileId: string, rotate = false): string {
   const cur = getSetting<string | null>(icsSettingKey(profileId), null);
   if (cur && !rotate) return cur;
-  const key = crypto.randomUUID().replace(/-/g, "");
-  setSetting(icsSettingKey(profileId), key);
-  return key;
+  const token = crypto.randomUUID().replace(/-/g, "");
+  setSetting(icsSettingKey(profileId), token);
+  return token;
 }
 
-export function verifyIcsKey(profileId: string, key: string | null): boolean {
+export function verifyIcsToken(profileId: string, token: string | null): boolean {
   const cur = getSetting<string | null>(icsSettingKey(profileId), null);
-  if (!cur || !key || cur.length !== key.length) return false;
-  let diff = 0;
-  for (let i = 0; i < cur.length; i++) diff |= cur.charCodeAt(i) ^ key.charCodeAt(i);
-  return diff === 0;
+  return !!cur && !!token && safeEqual(token, cur);
+}
+
+/**
+ * Feed path for calendar apps, which can't send the session cookie. `token` is the profile's own
+ * secret. With the password gate on (SOCIALBOOST_PASSWORD), `key` carries the gate's read-only
+ * feed key so src/proxy.ts lets the request through to this route.
+ */
+export function icsPath(profileId: string, rotate = false): string {
+  const q = new URLSearchParams({ profile: profileId, token: icsToken(profileId, rotate) });
+  if (authEnabled()) q.set("key", gateIcsKey());
+  return `/api/calendar/ics?${q.toString()}`;
 }
 
 export function icsFeed(profile: Profile, origin: string, now: Date = new Date()): string {

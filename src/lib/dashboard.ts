@@ -6,6 +6,7 @@
  * profile's timezone because "today" and "Tuesday" mean the person's local day.
  */
 import type { Memory, PostStatus } from "./types";
+import { parseAngleField } from "./factory/angles";
 
 /* ------------------------------------------------------------------ */
 /* Snapshot types                                                      */
@@ -227,7 +228,9 @@ export function storyBufferTarget(cadence: Cadence): number {
 
 /** First line of a post (or its angle) for previews. */
 export function hookOf(post: Pick<SnapshotPost, "body" | "angle">, max = 90): string {
-  const line = (post.body.split("\n").find((l) => l.trim()) ?? post.angle ?? "").trim();
+  // posts.angle is a JSON document (see factory/angles.ts); fall back to the chosen angle's hook.
+  const angle = parseAngleField(post.angle);
+  const line = (post.body.split("\n").find((l) => l.trim()) ?? angle.selected?.hook ?? angle.note ?? "").trim();
   if (!line) return "";
   return line.length > max ? line.slice(0, max - 1).trimEnd() + "…" : line;
 }

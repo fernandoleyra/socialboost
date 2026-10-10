@@ -1,5 +1,5 @@
 import { HttpError, handle, ok } from "@/lib/http";
-import { transcribe } from "@/lib/llm";
+import { LLMError, transcribe } from "@/lib/llm";
 import { requireProfile } from "@/lib/repo";
 import { getAISettings } from "@/lib/settings";
 
@@ -35,6 +35,14 @@ export const POST = handle(async (req: Request) => {
   if (file.size === 0) throw new HttpError(400, "The recording was empty.", "Check that the right microphone is selected.");
   if (file.size > MAX_AUDIO_BYTES) throw new HttpError(413, "That recording is too long.", "Keep voice answers under about 10 minutes.");
   const name = (file as File).name || `answer.${/mp4|m4a/.test(file.type) ? "m4a" : /ogg/.test(file.type) ? "ogg" : /wav/.test(file.type) ? "wav" : "webm"}`;
-  const text = await transcribe(file, name);
-  return ok({ text });
+  const t0 = Date.now();
+  try {
+    return ok({ text: await transcribe(file, name) });
+  } catch (err) {
+    // Node's fetch drops responses that take over 5 minutes to start; say so instead of "couldn't reach".
+    if (err instanceof LLMError && Date.now() - t0 >= 290_000) {
+      throw new LLMError("Transcription took more than 5 minutes and was dropped.", "Record shorter answers, or use a smaller Whisper model in Settings → Models.");
+    }
+    throw err;
+  }
 });

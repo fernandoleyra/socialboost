@@ -2,6 +2,7 @@ import "server-only";
 import { logActivity } from "@/lib/db";
 import { HttpError, streamText } from "@/lib/http";
 import { LLMError, chatJson, chatStream, embed } from "@/lib/llm";
+import { getRoute } from "@/lib/settings";
 import {
   addMessage,
   createInterview,
@@ -29,7 +30,6 @@ import {
   currentThread,
   decideNext,
   depthScore,
-  isSingleQuestionStage,
   planStoryInterview,
   positioningCoverage,
   splitThreads,
@@ -57,8 +57,8 @@ import {
 } from "./prompts";
 import {
   PillarsOnlySchema,
+  PositioningCoreSchema,
   PositioningCoverageCheckSchema,
-  PositioningExtractSchema,
   StoryCoverageCheckSchema,
   storyCardSchema,
   type CreateInterviewBody,
@@ -157,6 +157,8 @@ export function loadInterviewView(profile: Profile, id: string): InterviewView {
 
 export function startInterview(profile: Profile, body: z.infer<typeof CreateInterviewBody>): Interview {
   if (body.kind === "positioning") {
+    // One positioning interview at a time: starting over closes the unfinished one.
+    for (const old of listInterviews(profile.id)) if (old.kind === "positioning" && old.status === "active") updateInterview(old.id, { status: "abandoned" });
     const interview = createInterview({ profileId: profile.id, kind: "positioning", title: "Positioning interview", promptSeed: POSITIONING_AREAS[0].question.text });
     logActivity("interview", "Started the positioning interview", { profileId: profile.id, refId: interview.id });
     return interview;
@@ -166,6 +168,8 @@ export function startInterview(profile: Profile, body: z.infer<typeof CreateInte
   const pillars = strategy?.pillars ?? [];
   const memories = listMemories(profile.id);
   const validPillar = body.pillar && pillars.some((p) => p.id === body.pillar) ? body.pillar : null;
+  // pillar: null means "any topic" (chosen by the user); omitted means "target the pillar that needs stories".
+  const anyTopic = body.pillar === null;
   const knownStory = body.knownStory?.trim() || null;
 
   let pillarId: string | null;
@@ -175,7 +179,7 @@ export function startInterview(profile: Profile, body: z.infer<typeof CreateInte
     seed = knownStory;
   } else {
     const plan = planStoryInterview({
-      pillars,
+      pillars: anyTopic ? [] : pillars,
       memories,
       previousSeeds: listInterviews(profile.id)
         .map((i) => i.promptSeed ?? "")
@@ -282,7 +286,8 @@ function planTurn(profile: Profile, interview: Interview, ctx: InterviewContext,
  */
 export function replyStream(profile: Profile, id: string, body: z.infer<typeof ReplyBody>, signal: AbortSignal): Response {
   const interview = getOwnedInterview(profile.id, id);
-  if (interview.status !== "active") throw new HttpError(409, "This interview is closed.", "Reopen it from the menu, or start a new interview.");
+  if (interview.status === "completed") throw new HttpError(409, "This interview is already saved.", "Start a new interview to tell another story.");
+  if (interview.status !== "active") throw new HttpError(409, "This interview was ended without saving.", "Tap Reopen to keep going, or start a new interview.");
   const kind = activeKind(interview);
 
   let msgs = transcriptOf(id);
@@ -319,7 +324,9 @@ export function replyStream(profile: Profile, id: string, body: z.infer<typeof R
     const source = chatStream({
       task: "interviewer",
       system: interviewerSystemPrompt(ctx),
-      messages: interviewerMessages(ctx, thread, decision, plan.filter.mode === "free" ? "free" : "protocol"),
+      messages: interviewerMessages(ctx, thread, decision, plan.filter.mode === "free" ? "free" : "protocol", {
+        noteInUserTurn: getRoute("interviewer")?.provider.kind === "openai",
+      }),
       maxTokens: 260,
       signal: upstream.signal,
     });
@@ -379,7 +386,7 @@ export async function refreshCoverage(interviewId: string): Promise<void> {
   if (!heuristic.some((i) => i.status === "missing" && i.key !== "photo")) return;
 
   const name = getProfile(interview.profileId)?.name ?? "the user";
-  const prompt = coverageCheckPrompt(kind, name, formatTranscript(thread, name, 12000));
+  const prompt = coverageCheckPrompt(kind, name, formatTranscript(thread, name, transcriptBudget(12000, 300)));
   const opts = { task: "extractor" as const, system: prompt.system, messages: [{ role: "user" as const, content: prompt.user }], temperature: 0, maxTokens: 300 };
   try {
     const result: Record<string, boolean> = kind === "story" ? await chatJson(StoryCoverageCheckSchema, opts) : await chatJson(PositioningCoverageCheckSchema, opts);
@@ -419,26 +426,55 @@ export async function finishInterview(profile: Profile, id: string, body: z.infe
   }
 }
 
-async function finishPositioning(profile: Profile, interview: Interview, msgs: TranscriptMessage[]): Promise<FinishResult> {
-  const prompt = positioningPrompt({ name: profile.name, headline: profile.headline, language: profile.language, transcript: formatTranscript(msgs, profile.name) });
-  const extract = await chatJson(PositioningExtractSchema, {
-    task: "extractor",
-    system: prompt.system,
-    messages: [{ role: "user", content: prompt.user }],
-    maxTokens: 3000,
-  });
-  if (extract.pillars.filter((p) => p.name.trim()).length < 2) {
-    // Small models sometimes skip the nested pillar list; ask for it on its own.
-    try {
-      const p = pillarsPrompt({ name: profile.name, language: profile.language, summary: extractSummary(extract) || formatTranscript(msgs, profile.name, 8000) });
-      const res = await chatJson(PillarsOnlySchema, { task: "extractor", system: p.system, messages: [{ role: "user", content: p.user }], maxTokens: 1500 });
-      if (res.pillars.length) extract.pillars = res.pillars;
-    } catch (err) {
-      console.warn(`[interview] pillar retry failed: ${err instanceof Error ? err.message : String(err)}`);
+/**
+ * How much transcript fits an extractor call. Ollama silently drops the start of a prompt
+ * that overflows num_ctx (the instructions would go first), so budget from the configured
+ * context: ~3 characters per token, minus the reply and the prompt around the transcript.
+ */
+function transcriptBudget(maxChars: number, replyTokens: number): number {
+  const r = getRoute("extractor");
+  if (!r || r.provider.kind !== "ollama") return maxChars;
+  return Math.max(4000, Math.min(maxChars, (r.numCtx - replyTokens - 1200) * 3));
+}
+
+/** Node's fetch gives up on a response whose headers take over 5 minutes (non-streamed calls). */
+const SLOW_CALL_MS = 290_000;
+
+async function timed<T>(fn: () => Promise<T>): Promise<T> {
+  const t0 = Date.now();
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof LLMError && Date.now() - t0 >= SLOW_CALL_MS) {
+      throw new LLMError(
+        "The model took more than 5 minutes to answer, so the request was dropped. Nothing was lost: your interview is still here.",
+        "Try again when the machine is less busy, or pick a smaller or faster model for the Extractor task in Settings → Models.",
+      );
     }
+    throw err;
+  }
+}
+
+async function finishPositioning(profile: Profile, interview: Interview, msgs: TranscriptMessage[]): Promise<FinishResult> {
+  // Two small calls instead of one big one: local models on a CPU stay well under the 5-minute limit.
+  const prompt = positioningPrompt({
+    name: profile.name,
+    headline: profile.headline,
+    language: profile.language,
+    transcript: formatTranscript(msgs, profile.name, transcriptBudget(24000, 1200)),
+  });
+  const core = await timed(() =>
+    chatJson(PositioningCoreSchema, { task: "extractor", system: prompt.system, messages: [{ role: "user", content: prompt.user }], maxTokens: 1200 }),
+  );
+  const summary = extractSummary({ ...core, pillars: [] }) || formatTranscript(msgs, profile.name, 6000);
+  const p = pillarsPrompt({ name: profile.name, language: profile.language, summary });
+  let pillars = (await timed(() => chatJson(PillarsOnlySchema, { task: "extractor", system: p.system, messages: [{ role: "user", content: p.user }], maxTokens: 900 }))).pillars;
+  if (pillars.filter((x) => x.name.trim()).length < 2) {
+    // Small models sometimes return an empty list; one more try.
+    pillars = (await timed(() => chatJson(PillarsOnlySchema, { task: "extractor", system: p.system, messages: [{ role: "user", content: p.user }], maxTokens: 900, temperature: 0.5 }))).pillars;
   }
   const existing = getStrategy(profile.id);
-  const strategy = mergeStrategy(existing, extract, { language: profile.language });
+  const strategy = mergeStrategy(existing, { ...core, pillars }, { language: profile.language });
   saveStrategy(profile.id, strategy);
   const updated = updateInterview(interview.id, { status: "completed", title: "Positioning interview", summary: strategy.positioning || "Strategy drafted from the interview." });
   logActivity("strategy", existing ? "Strategy updated from the positioning interview" : "Strategy drafted from the positioning interview", {
@@ -468,10 +504,10 @@ async function finishStory(profile: Profile, interview: Interview, msgs: Transcr
       headline: profile.headline,
       language: profile.language,
       pillars: pillars.map((p) => ({ name: p.name, description: p.description })),
-      transcript: formatTranscript(story.messages, profile.name, 16000),
+      transcript: formatTranscript(story.messages, profile.name, transcriptBudget(16000, 1400)),
       privacy: story.privacy,
     });
-    const card = await chatJson(schema, { task: "extractor", system: prompt.system, messages: [{ role: "user", content: prompt.user }], maxTokens: 2500 });
+    const card = await timed(() => chatJson(schema, { task: "extractor", system: prompt.system, messages: [{ role: "user", content: prompt.user }], maxTokens: 1400 }));
     const users = thread.filter((m) => m.role === "user");
     const memory = cardToMemory(card, {
       userTexts: users.map((m) => m.content),

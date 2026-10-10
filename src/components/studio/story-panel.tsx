@@ -84,8 +84,8 @@ export function StoryPanel({
             )}
             {memory.quotes.length > 0 && (
               <div className="space-y-2">
-                {memory.quotes.slice(0, 4).map((q) => (
-                  <blockquote key={q} className="flex gap-2 border-l-2 pl-3 t-footnote italic" style={{ borderColor: "var(--accent)" }}>
+                {memory.quotes.slice(0, 4).map((q, i) => (
+                  <blockquote key={i} className="flex gap-2 border-l-2 pl-3 t-footnote italic" style={{ borderColor: "var(--accent)" }}>
                     <Quote className="mt-0.5 size-3 shrink-0 text-accent not-italic" />
                     {q}
                   </blockquote>
@@ -95,8 +95,8 @@ export function StoryPanel({
             {memory.details.length > 0 && (
               <Disclosure title={`Details (${memory.details.length})`}>
                 <ul className="space-y-1">
-                  {memory.details.map((d) => (
-                    <li key={d} className="flex gap-2 t-footnote">
+                  {memory.details.map((d, i) => (
+                    <li key={i} className="flex gap-2 t-footnote">
                       <span className="mt-[7px] size-1 shrink-0 rounded-full bg-[var(--label-3)]" />
                       {d}
                     </li>
@@ -110,9 +110,9 @@ export function StoryPanel({
                 <p className="t-footnote mt-0.5">{memory.lesson}</p>
               </div>
             )}
-            <Link href="/memories" className="inline-flex items-center gap-1.5 t-footnote font-semibold text-accent">
+            <Link href={`/memories?open=${encodeURIComponent(memory.id)}`} className="inline-flex items-center gap-1.5 t-footnote font-semibold text-accent">
               <Library className="size-3.5" />
-              Open the Memory Bank
+              Edit this story in the Memory Bank
             </Link>
           </>
         ) : (

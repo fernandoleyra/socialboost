@@ -60,10 +60,18 @@ export const PATCH = handle(async (req: Request, ctx: Ctx) => {
     throw new HttpError(409, "This post is already published.", "Edit it on LinkedIn; changes here wouldn't reach your feed.");
   }
 
+  if (patch.status === "published" && post.status !== "published") {
+    throw new HttpError(400, "Use “Mark as posted” or “Publish now” to publish a post.", "They record the LinkedIn link and mark the story as used, so Insights can track it.");
+  }
+
   const nextBody = patch.body ?? post.body;
   const nextScheduled = patch.scheduledAt !== undefined ? patch.scheduledAt : post.scheduledAt;
   if (patch.status && patch.status !== post.status) {
     const check = checkStatusChange({ from: post.status, to: patch.status, body: nextBody, scheduledAt: nextScheduled });
+    if (!check.ok) throw new HttpError(400, check.message, check.hint);
+  } else if (post.status === "scheduled" && patch.scheduledAt !== undefined && patch.scheduledAt !== post.scheduledAt) {
+    // Moving a scheduled post: the new time must be valid too, or the scheduler would publish it at once.
+    const check = checkStatusChange({ from: "approved", to: "scheduled", body: nextBody, scheduledAt: nextScheduled });
     if (!check.ok) throw new HttpError(400, check.message, check.hint);
   }
 
@@ -84,10 +92,7 @@ export const PATCH = handle(async (req: Request, ctx: Ctx) => {
       update.angle = serializeAngleField({ ...field, selected: a });
     }
   }
-  if (patch.status && patch.status !== post.status) {
-    update.status = patch.status;
-    if (patch.status === "published" && !post.publishedAt) update.publishedAt = new Date().toISOString();
-  }
+  if (patch.status && patch.status !== post.status) update.status = patch.status;
   if (Object.keys(update).length) post = updatePost(post.id, update);
 
   if (update.status === "approved" || update.status === "scheduled" || update.status === "review") {

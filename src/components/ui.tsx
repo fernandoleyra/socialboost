@@ -77,13 +77,13 @@ export const Button = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HTMLBut
   },
 );
 
-export function IconButton({ label, className, children, ...rest }: ButtonHTMLAttributes<HTMLButtonElement> & { label: string }) {
+export const IconButton = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HTMLButtonElement> & { label: string }>(function IconButton({ label, className, children, ...rest }, ref) {
   return (
-    <button aria-label={label} title={label} className={cx("icon-btn focus-ring", className)} {...rest}>
+    <button ref={ref} aria-label={label} title={label} className={cx("icon-btn focus-ring", className)} {...rest}>
       {children}
     </button>
   );
-}
+});
 
 /* ------------------------------------------------------------------ */
 /* Fields                                                              */

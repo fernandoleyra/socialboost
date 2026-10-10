@@ -22,6 +22,8 @@ export type LintOptions = {
   neverSay?: string[];
   /** Extra phrases that are the user's own and must not be flagged. */
   allow?: string[];
+  /** The story text from the interview. Enables the "copied notes" check. */
+  notes?: string;
 };
 
 export const LINKEDIN_MAX_CHARS = 3000;
@@ -67,6 +69,7 @@ export const RULE_LABELS: Record<string, string> = {
   "uniform-rhythm": "Same-length sentences",
   "unverified-number": "Number not in the story",
   "unverified-quote": "Quote not in the story",
+  "copied-notes": "Copied from your notes",
 };
 
 export const FIXABLE_RULES = ["em-dash", "double-space", "unicode-styling", "markdown"] as const;
@@ -111,7 +114,7 @@ function splitLines(text: string): Line[] {
 
 function sentencesOf(line: Line): Sentence[] {
   const out: Sentence[] = [];
-  const re = /[^.!?]+(?:[.!?]+["”’')\]]*|$)/g;
+  const re = /(?:[^.!?]|[.,](?=\d))+(?:[.!?]+["”’')\]]*|$)/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(line.text))) {
     const t = m[0];
@@ -179,13 +182,25 @@ function factNumbers(facts: string): Set<number> {
   return set;
 }
 
-const normalizeForMatch = (s: string) =>
+export const normalizeForMatch = (s: string) =>
   s
     .toLowerCase()
     .replace(/[’‘]/g, "'")
     .replace(/[^\p{L}\p{N}' ]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
+
+/** Whether a phrase is (nearly) word for word in the facts: substring, or ≥ 75% of its words. */
+export function matchesFacts(text: string, facts: string): boolean {
+  const q = normalizeForMatch(text);
+  if (!q) return true;
+  const factsNorm = normalizeForMatch(facts);
+  if (factsNorm.includes(q)) return true;
+  const toks = q.split(" ").filter(Boolean);
+  if (toks.length < 3) return false;
+  const factTokens = new Set(factsNorm.split(" "));
+  return toks.filter((t) => factTokens.has(t)).length / toks.length >= 0.75;
+}
 
 /* ------------------------------------------------------------------ */
 /* Lint                                                                */
@@ -506,17 +521,33 @@ export function lintPost(text: string, voiceStats?: VoiceStats | null, opts: Lin
       if (known.has(n.value)) continue;
       push(ctx, "unverified-number", "warn", `"${n.raw}" isn't in the story. Make sure it's real, or cut it.`, n.start, n.end);
     }
-    const factsNorm = normalizeForMatch(opts.facts);
-    const factTokens = new Set(factsNorm.split(" "));
+    const facts = opts.facts;
     eachMatch(text, /["“]([^"“”\n]{8,})["”]/g, (m) => {
-      const q = normalizeForMatch(m[1]);
-      const toks = q.split(" ").filter(Boolean);
-      if (toks.length < 4) return;
-      if (factsNorm.includes(q)) return;
-      const overlap = toks.filter((t) => factTokens.has(t)).length / toks.length;
-      if (overlap >= 0.75) return;
+      if (normalizeForMatch(m[1]).split(" ").filter(Boolean).length < 4) return;
+      if (matchesFacts(m[1], facts)) return;
       push(ctx, "unverified-quote", "warn", "This quote isn't in the story. Quotes must be words someone actually said.", m.index, m.index + m[0].length);
     });
+  }
+
+  /* ---- Copied notes: the interview notes pasted back instead of a post ---- */
+  if (opts.notes && opts.notes.trim()) {
+    const notesNorm = normalizeForMatch(opts.notes);
+    const sents = nonList.flatMap(sentencesOf).filter((s) => wordsOf(s.text).length >= 8);
+    if (sents.length >= 3) {
+      const copied = sents.filter((s) => notesNorm.includes(normalizeForMatch(s.text)));
+      const ratio = copied.length / sents.length;
+      if (ratio >= 0.4) {
+        const first = copied[0];
+        push(
+          ctx,
+          "copied-notes",
+          ratio >= 0.6 && sents.length >= 4 ? "error" : "warn",
+          `${copied.length} of ${sents.length} sentences are copied word for word from your notes. Keep the facts, but give the post a hook and its own shape.`,
+          first.start,
+          first.start + first.text.length,
+        );
+      }
+    }
   }
 
   const issues = dedupe(ctx.issues);
@@ -573,12 +604,22 @@ export function autofix(text: string, rules: readonly string[] = FIXABLE_RULES):
   return t;
 }
 
+/**
+ * Quoted terms: "double" or “curly” quotes, or 'single' quotes that open and close at word
+ * edges. The apostrophes in "don't" or "I'd" are not quote marks, so `Don't say 'folks'` yields
+ * "folks", and a quoted term may contain one ('don't').
+ */
+const QUOTED_TERM = /["“]([^"“”\n]{2,40})["”]|(?<![\p{L}\p{N}])['‘]((?:[^'‘’"“”\n]|(?<=\p{L})['’](?=\p{L})){2,40}?)['’](?![\p{L}\p{N}])/gu;
+
 /** Pull quoted terms out of rules like `Never say "synergy"` or `Avoid 'folks', 'peeps'`. */
 export function extractNeverSay(rules: string[]): string[] {
   const out = new Set<string>();
   for (const r of rules) {
     if (!/\b(never|don['’]?t|do not|avoid|no|stop|ban|banned|not)\b/i.test(r)) continue;
-    for (const m of r.matchAll(/["“'‘]([^"“”'‘’]{2,40})["”'’]/g)) out.add(m[1].trim());
+    for (const m of r.matchAll(QUOTED_TERM)) {
+      const term = (m[1] ?? m[2] ?? "").trim();
+      if (term.length >= 2) out.add(term);
+    }
   }
   return [...out];
 }

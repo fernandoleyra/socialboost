@@ -6,7 +6,7 @@ import { BookOpen, Pencil, RefreshCw, WandSparkles } from "lucide-react";
 import { Button, Chip, IconButton, Textarea, toast } from "@/components/ui";
 import type { VoiceGuide } from "@/lib/types";
 import { GOOD_POST_COUNT, GUIDE_SECTIONS, MIN_POSTS_FOR_ANALYSIS, type GuideListKey, type ProfileUpdate, type VoiceMeta } from "@/lib/voice/types";
-import { errorMessage } from "./format";
+import { errorMessage, fmtDay, parseDate, useHydrated } from "./format";
 
 type SaveGuide = (patch: NonNullable<ProfileUpdate["guide"]>) => Promise<void>;
 
@@ -91,6 +91,10 @@ export function StyleGuide({
   onSave: SaveGuide;
 }) {
   const [editing, setEditing] = useState<GuideListKey | "summary" | null>(null);
+  const hydrated = useHydrated();
+  const analyzedAt = parseDate(meta.analyzedAt);
+  // "3 days ago" depends on the clock, so the server and first client render show the date instead.
+  const when = analyzedAt ? (hydrated ? formatDistanceToNow(analyzedAt, { addSuffix: true }) : `on ${fmtDay(meta.analyzedAt, false)}`) : "";
   const isEmpty = !guide.summary.trim() && GUIDE_SECTIONS.every((s) => guide[s.key].length === 0);
   const newPosts = meta.analyzedAt ? ownCount - meta.guideSampleCount : 0;
   const canAnalyze = ownCount >= MIN_POSTS_FOR_ANALYSIS;
@@ -111,8 +115,8 @@ export function StyleGuide({
         <div>
           <h2 className="t-title-3">Style guide</h2>
           <p className="t-footnote mt-0.5 text-label-2">
-            {meta.analyzedAt
-              ? `Written from ${meta.postsRead} of your posts, ${formatDistanceToNow(new Date(meta.analyzedAt), { addSuffix: true })}. Edit anything that isn't you.`
+            {analyzedAt
+              ? `Written from ${meta.postsRead} of your posts ${when}. Edit anything that isn't you.`
               : "How you sound, in words the writer can follow. Every line is editable."}
           </p>
         </div>
@@ -160,16 +164,16 @@ export function StyleGuide({
                   <p className="t-footnote text-label-3">Nothing yet.</p>
                 ) : s.key === "tone" ? (
                   <div className="flex flex-wrap gap-1.5">
-                    {guide.tone.map((t) => (
-                      <Chip key={t} tone="blue">
+                    {guide.tone.map((t, i) => (
+                      <Chip key={`${i}-${t}`} tone="blue">
                         {t}
                       </Chip>
                     ))}
                   </div>
                 ) : (
                   <ul className="space-y-1.5">
-                    {guide[s.key].map((item) => (
-                      <li key={item} className="t-subhead flex gap-2">
+                    {guide[s.key].map((item, i) => (
+                      <li key={`${i}-${item}`} className="t-subhead flex gap-2">
                         <span aria-hidden className={s.key === "neverDoes" ? "text-sys-red" : "text-label-3"}>
                           {s.key === "neverDoes" ? "×" : "•"}
                         </span>

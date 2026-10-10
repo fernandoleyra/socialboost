@@ -102,9 +102,11 @@ export function InterviewChat({ initial, timeZone }: { initial: InterviewView; t
   const [sheetPhotos, setSheetPhotos] = useState<string[]>([]);
   const [menu, setMenu] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [focusKey, setFocusKey] = useState(0);
   const [showTranscript, setShowTranscript] = useState(false);
   const controller = useRef<AbortController | null>(null);
+  const refreshSeq = useRef(0);
   const autoStarted = useRef(false);
   const nearBottom = useRef(true);
   const endRef = useRef<HTMLDivElement>(null);
@@ -119,12 +121,14 @@ export function InterviewChat({ initial, timeZone }: { initial: InterviewView; t
   const hasAnswers = view.messages.some((m) => m.role === "user");
 
   const refresh = useCallback(async () => {
+    // Refreshes can overlap (one mid-stream, one at the end): only the latest may update the view.
+    const seq = ++refreshSeq.current;
     try {
       const next = await api<InterviewView>(`/api/interviews/${id}`);
-      setView(next);
+      if (seq === refreshSeq.current) setView(next);
       return next;
     } catch (e) {
-      toast((e as Error).message, "error");
+      if (seq === refreshSeq.current) toast((e as Error).message, "error");
       return null;
     }
   }, [id]);
@@ -196,6 +200,14 @@ export function InterviewChat({ initial, timeZone }: { initial: InterviewView; t
     if (!completed && nearBottom.current) endRef.current?.scrollIntoView({ block: "end", behavior: streaming ? "auto" : "smooth" });
   }, [view.messages.length, streaming, pending, error, completed, view.pendingPhotoRequestId]);
 
+  // The "More" menu closes on Escape, like a native popover.
+  useEffect(() => {
+    if (!menu) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setMenu(false);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [menu]);
+
   // Progress copy while the extractor works (local models can take a minute).
   useEffect(() => {
     if (!finishing) return;
@@ -245,6 +257,7 @@ export function InterviewChat({ initial, timeZone }: { initial: InterviewView; t
   };
 
   const remove = async () => {
+    setDeleting(true);
     try {
       await api(`/api/interviews/${id}`, { method: "DELETE" });
       toast("Interview deleted");
@@ -252,6 +265,7 @@ export function InterviewChat({ initial, timeZone }: { initial: InterviewView; t
       router.refresh();
     } catch (e) {
       toast((e as Error).message, "error");
+      setDeleting(false);
     }
   };
 
@@ -381,7 +395,7 @@ export function InterviewChat({ initial, timeZone }: { initial: InterviewView; t
                 Reopen
               </Button>
             )}
-            <IconButton label="More" onClick={() => setMenu((o) => !o)} className="glass" aria-expanded={menu}>
+            <IconButton label="More" onClick={() => setMenu((o) => !o)} className="glass" aria-expanded={menu} aria-haspopup="menu">
               <Ellipsis className="size-5" />
             </IconButton>
             {menu && (
@@ -438,7 +452,8 @@ export function InterviewChat({ initial, timeZone }: { initial: InterviewView; t
                   busy={busy}
                   lang={view.language}
                   focusKey={focusKey}
-                  placeholder={busy ? "Listening…" : view.readyToFinish ? "Tell me about another moment…" : "Type your answer, or tap the mic"}
+                  allowPhotos={kind === "story"}
+                  placeholder={busy ? "Writing the next question…" : view.readyToFinish ? "Tell me about another moment…" : "Type your answer, or tap the mic"}
                   onSend={(content, photoIds) => runReply({ content, photoIds })}
                   onStop={stop}
                 />
@@ -480,20 +495,19 @@ export function InterviewChat({ initial, timeZone }: { initial: InterviewView; t
         title="One more thing: a photo"
         size="sm"
         footer={
-          <>
-            <Button variant="plain" onClick={() => void doFinish(sheetPhotos)}>
-              {sheetPhotos.length ? "Save" : "Remind me later"}
+          sheetPhotos.length > 0 ? (
+            <Button variant="primary" icon={<Check className="size-4" />} onClick={() => void doFinish(sheetPhotos)}>
+              Save with {sheetPhotos.length === 1 ? "photo" : `${sheetPhotos.length} photos`}
             </Button>
-            {sheetPhotos.length > 0 && (
-              <Button variant="primary" onClick={() => void doFinish(sheetPhotos)}>
-                Save with {sheetPhotos.length === 1 ? "photo" : `${sheetPhotos.length} photos`}
-              </Button>
-            )}
-          </>
+          ) : (
+            <Button variant="plain" onClick={() => void doFinish([])}>
+              Save without a photo
+            </Button>
+          )
         }
       >
         <div className="space-y-4">
-          <p className="t-subhead text-label-2">Posts with a real photo of the moment do far better than text alone. Add one now, or save and we'll flag this story as needing a photo.</p>
+          <p className="t-subhead text-label-2">Posts with a real photo of the moment do far better than text alone. Add one now, or save without it and the story is flagged as needing a photo in your Memory Bank.</p>
           {sheetPhotos.length > 0 && (
             <div className="flex gap-2">
               {sheetPhotos.map((p) => (
@@ -532,7 +546,7 @@ export function InterviewChat({ initial, timeZone }: { initial: InterviewView; t
             <Button variant="plain" onClick={() => setConfirmDelete(false)}>
               Cancel
             </Button>
-            <Button variant="destructive" icon={<Trash2 className="size-4" />} onClick={() => void remove()}>
+            <Button variant="destructive" icon={<Trash2 className="size-4" />} loading={deleting} onClick={() => void remove()}>
               Delete
             </Button>
           </>

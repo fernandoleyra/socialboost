@@ -11,6 +11,9 @@ type Attachment = { key: string; preview: string; progress: number; photo?: Phot
 
 const fmtTime = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 
+/** Matches the reply API's limit; longer answers are better split into a few messages. */
+const MAX_ANSWER_CHARS = 8000;
+
 /**
  * The floating glass composer: autosizing textarea (Enter sends, Shift+Enter newline),
  * photo attachments (button, drag & drop, paste) and voice answers.
@@ -18,6 +21,7 @@ const fmtTime = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(
 export function Composer({
   busy,
   disabled,
+  allowPhotos = true,
   lang,
   placeholder,
   focusKey,
@@ -26,6 +30,8 @@ export function Composer({
 }: {
   busy: boolean;
   disabled?: boolean;
+  /** Story interviews take photos; the positioning interview doesn't need them. */
+  allowPhotos?: boolean;
   lang: string;
   placeholder: string;
   focusKey?: number;
@@ -69,7 +75,7 @@ export function Composer({
   useEffect(() => () => previews.current.forEach((u) => URL.revokeObjectURL(u)), []);
 
   const addFiles = (files: File[]) => {
-    if (!files.length) return;
+    if (!files.length || !allowPhotos) return;
     if (attachments.length + files.length > 6) {
       toast("Up to 6 photos per answer.", "info");
       files = files.slice(0, Math.max(0, 6 - attachments.length));
@@ -89,10 +95,15 @@ export function Composer({
 
   const uploading = attachments.some((a) => !a.photo && !a.error);
   const ready = attachments.filter((a) => a.photo).map((a) => a.photo!.id);
+  const tooLong = text.trim().length > MAX_ANSWER_CHARS;
   const canSend = !busy && !disabled && !sending && !uploading && (text.trim().length > 0 || ready.length > 0);
 
   const send = async () => {
     if (!canSend) return;
+    if (tooLong) {
+      toast(`That answer is over ${MAX_ANSWER_CHARS.toLocaleString("en-US")} characters. Send the first part now and the rest in your next message.`, "info");
+      return;
+    }
     if (dictation.status === "recording") dictation.stop();
     setSending(true);
     const accepted = await onSend(text.trim(), ready);
@@ -117,6 +128,7 @@ export function Composer({
   };
 
   const onPaste = (e: ClipboardEvent) => {
+    if (!allowPhotos) return;
     const files = imageFiles(Array.from(e.clipboardData.files));
     if (files.length) {
       e.preventDefault();
@@ -131,7 +143,7 @@ export function Composer({
     <div
       className={cx("glass rounded-[28px] p-2 transition-shadow", dragging && "ring-2 ring-[color:var(--accent)]")}
       onDragOver={(e) => {
-        if (e.dataTransfer.types.includes("Files")) {
+        if (allowPhotos && e.dataTransfer.types.includes("Files")) {
           e.preventDefault();
           setDragging(true);
         }
@@ -178,28 +190,38 @@ export function Composer({
         </div>
       )}
 
-      <div className="flex items-end gap-1">
-        <button
-          type="button"
-          className="icon-btn focus-ring shrink-0 text-label-2"
-          aria-label="Add photos"
-          title="Add photos"
-          disabled={disabled}
-          onClick={() => fileInput.current?.click()}
-        >
-          <ImagePlus className="size-5" />
-        </button>
-        <input
-          ref={fileInput}
-          type="file"
-          accept={PHOTO_ACCEPT}
-          multiple
-          hidden
-          onChange={(e) => {
-            addFiles(imageFiles(e.target.files));
-            e.target.value = "";
-          }}
-        />
+      {tooLong && (
+        <p className="px-3 pb-1.5 t-footnote text-sys-orange" role="status">
+          {text.trim().length.toLocaleString("en-US")} / {MAX_ANSWER_CHARS.toLocaleString("en-US")} characters. Split this into two messages.
+        </p>
+      )}
+
+      <div className={cx("flex items-end gap-1", !allowPhotos && "pl-2")}>
+        {allowPhotos && (
+          <>
+            <button
+              type="button"
+              className="icon-btn focus-ring shrink-0 text-label-2"
+              aria-label="Add photos"
+              title="Add photos"
+              disabled={disabled}
+              onClick={() => fileInput.current?.click()}
+            >
+              <ImagePlus className="size-5" />
+            </button>
+            <input
+              ref={fileInput}
+              type="file"
+              accept={PHOTO_ACCEPT}
+              multiple
+              hidden
+              onChange={(e) => {
+                addFiles(imageFiles(e.target.files));
+                e.target.value = "";
+              }}
+            />
+          </>
+        )}
         <label className="sr-only" htmlFor="interview-answer">
           Your answer
         </label>

@@ -3,13 +3,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { CalendarClock, Camera } from "lucide-react";
 import { Button, Field, Input, Sheet, cx } from "@/components/ui";
-import { fromLocalInput, nextOpenSlots, toLocalInput, type Cadence } from "@/lib/factory/schedule";
+import { fromLocalInput, nextOpenSlots, toLocalInput, type Cadence, type TakenSlot } from "@/lib/factory/schedule";
 
 export function ScheduleSheet({
   open,
   onClose,
   current,
   cadence,
+  timezone,
   taken,
   needsApproval,
   missingPhoto,
@@ -21,14 +22,16 @@ export function ScheduleSheet({
   onClose: () => void;
   current: string | null;
   cadence: Cadence | null;
-  taken: string[];
+  /** The profile's time zone: the cadence ("Tue 08:30") is in it. */
+  timezone: string;
+  taken: TakenSlot[];
   needsApproval: boolean;
   missingPhoto: boolean;
   saving: boolean;
   onConfirm: (iso: string) => void;
   onAddPhoto: () => void;
 }) {
-  const slots = useMemo(() => (open ? nextOpenSlots(cadence, taken, new Date(), 4) : []), [open, cadence, taken]);
+  const slots = useMemo(() => (open ? nextOpenSlots({ cadence, timezone, taken, now: new Date(), count: 4 }) : []), [open, cadence, timezone, taken]);
   const [value, setValue] = useState("");
   useEffect(() => {
     if (!open) return;
@@ -39,6 +42,11 @@ export function ScheduleSheet({
   const iso = fromLocalInput(value);
   const past = iso ? Date.parse(iso) < Date.now() : false;
   const tz = typeof Intl !== "undefined" ? Intl.DateTimeFormat().resolvedOptions().timeZone : "";
+  const tzHint = !tz
+    ? undefined
+    : timezone && timezone !== tz
+      ? `Times are in this browser's time zone (${tz}). Your posting cadence is set in ${timezone}.`
+      : `Your time zone: ${tz}. Weekday mornings, at least a day apart, work best.`;
 
   return (
     <Sheet
@@ -81,7 +89,7 @@ export function ScheduleSheet({
             </div>
           </div>
         )}
-        <Field label="Date and time" hint={tz ? `Your time zone: ${tz}. Weekday mornings, at least a day apart, work best.` : undefined}>
+        <Field label="Date and time" hint={tzHint}>
           <Input type="datetime-local" value={value} onChange={(e) => setValue(e.target.value)} min={toLocalInput(new Date())} />
         </Field>
         {past && <p className="t-footnote text-sys-red px-1">That time has already passed.</p>}

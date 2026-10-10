@@ -4,6 +4,7 @@ import { handle, ok, HttpError } from "@/lib/http";
 import { listPostVersions, requireProfile } from "@/lib/repo";
 import { applyHumanEdit, requirePost } from "@/lib/factory/posts";
 import { getVersion } from "@/lib/factory/versions";
+import { safeTimezone } from "@/lib/calendar/time";
 
 export const dynamic = "force-dynamic";
 
@@ -26,6 +27,7 @@ export const POST = handle(async (req: Request, ctx: Ctx) => {
   const { versionId } = await readBody(req, z.object({ versionId: z.string().min(1) }));
   const version = getVersion(post.id, versionId);
   if (!version) throw new HttpError(404, "Version not found");
-  const when = new Date(version.createdAt).toLocaleString("en", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  // The note is stored text, so write the time in the person's own time zone, not the server's.
+  const when = new Date(version.createdAt).toLocaleString("en", { timeZone: safeTimezone(profile.timezone), month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   return ok({ post: applyHumanEdit(post, version.body, `Restored the version from ${when}`) });
 });

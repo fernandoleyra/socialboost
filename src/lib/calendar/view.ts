@@ -8,7 +8,7 @@
  */
 
 import type { PostStatus } from "@/lib/types";
-import { MISSED_MESSAGE, PUBLISHING_MARKER, STALE_PUBLISH_MS, VERIFY_MESSAGE, publishingSince } from "./linkedin-format";
+import { PUBLISHING_MARKER, STALE_PUBLISH_MS, VERIFY_MESSAGE, publishingSince } from "./linkedin-format";
 import { addDays, addMonths, startOfMonth, startOfWeek, type DayKey } from "./time";
 
 export type DisplayState = "idea" | "draft" | "review" | "approved" | "scheduled" | "due" | "publishing" | "verify" | "published" | "stale";
@@ -46,12 +46,14 @@ export function displayState(post: StatePost, now: Date = new Date()): DisplaySt
   return "idea";
 }
 
-/** The error to show on a post, hiding stale scheduler messages once the post has a future time. */
+/**
+ * The error to show on a post. A scheduled post with a future time gets a fresh attempt then, so
+ * messages from an earlier slot are hidden; the in-flight marker is a state, not an error.
+ */
 export function visibleError(post: StatePost, now: Date = new Date()): string | null {
-  if (!post.error || post.error.startsWith(PUBLISHING_MARKER)) return null;
+  if (!post.error || post.error.startsWith(PUBLISHING_MARKER) || post.status === "published") return null;
   const at = post.scheduledAt ? Date.parse(post.scheduledAt) : NaN;
-  if (post.status === "scheduled" && !Number.isNaN(at) && at > now.getTime() && post.error === MISSED_MESSAGE) return null;
-  if (post.status === "published") return null;
+  if (post.status === "scheduled" && !Number.isNaN(at) && at > now.getTime() && post.error !== VERIFY_MESSAGE) return null;
   return post.error;
 }
 
@@ -104,15 +106,17 @@ export function formatMonthTitle(anchor: DayKey, locale?: string): string {
   return new Intl.DateTimeFormat(locale, { month: "long", year: "numeric", timeZone: "UTC" }).format(keyDate(anchor));
 }
 
+/** "5–11 October 2026", "28 Sept – 4 Oct 2026", "29 Dec 2025 – 4 Jan 2026". */
 export function formatWeekTitle(anchor: DayKey, locale?: string, weekStartsOn = WEEK_STARTS_ON): string {
   const days = weekKeys(anchor, weekStartsOn);
   const a = keyDate(days[0]);
   const b = keyDate(days[6]);
-  const sameMonth = days[0].slice(0, 7) === days[6].slice(0, 7);
   const f = (d: Date, opts: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat(locale, { ...opts, timeZone: "UTC" }).format(d);
-  return sameMonth
-    ? `${f(a, { month: "long", day: "numeric" })} – ${f(b, { day: "numeric" })}, ${f(b, { year: "numeric" })}`
-    : `${f(a, { month: "short", day: "numeric" })} – ${f(b, { month: "short", day: "numeric", year: "numeric" })}`;
+  const da = dayOfMonth(days[0]);
+  const db = dayOfMonth(days[6]);
+  if (days[0].slice(0, 7) === days[6].slice(0, 7)) return `${da}–${db} ${f(b, { month: "long" })} ${f(b, { year: "numeric" })}`;
+  if (days[0].slice(0, 4) === days[6].slice(0, 4)) return `${da} ${f(a, { month: "short" })} – ${db} ${f(b, { month: "short" })} ${f(b, { year: "numeric" })}`;
+  return `${da} ${f(a, { month: "short" })} ${f(a, { year: "numeric" })} – ${db} ${f(b, { month: "short" })} ${f(b, { year: "numeric" })}`;
 }
 
 export function formatDayLong(key: DayKey, locale?: string): string {

@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { NewInterview } from "@/components/interview/new-interview";
 import { neediestPillar, pillarStats, planStoryInterview } from "@/lib/interview/engine";
-import { getStrategy, listInterviews, listMemories, requireProfile } from "@/lib/repo";
+import { getActiveProfile, getStrategy, listInterviews, listMemories } from "@/lib/repo";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "New interview — SocialBoost" };
@@ -11,7 +11,8 @@ type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
 export default async function NewInterviewPage({ searchParams }: { searchParams: SearchParams }) {
   const sp = await searchParams;
-  const profile = requireProfile();
+  const profile = getActiveProfile();
+  if (!profile) redirect("/welcome");
   const interviews = listInterviews(profile.id);
   const activePositioning = interviews.find((i) => i.kind === "positioning" && i.status === "active") ?? null;
   const donePositioning = interviews.find((i) => i.kind === "positioning" && i.status === "completed") ?? null;

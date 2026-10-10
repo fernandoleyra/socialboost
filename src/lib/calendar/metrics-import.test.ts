@@ -48,6 +48,34 @@ describe("parseMetricsCsv", () => {
     expect(parsed.rows[1]).toMatchObject({ impressions: 800, reactions: null });
   });
 
+  it("reads LinkedIn's side-by-side TOP POSTS tables as separate posts, never joined by line", () => {
+    const a = "https://www.linkedin.com/feed/update/urn:li:activity:7111111111111111111/";
+    const b = "https://www.linkedin.com/feed/update/urn:li:activity:7222222222222222222/";
+    const c = "https://www.linkedin.com/feed/update/urn:li:activity:7333333333333333333/";
+    const csv = [
+      "Maximum of 50 posts available to include in this list,,,,,,",
+      "Post URL,Post publish date,Engagements,,Post URL,Post publish date,Impressions",
+      `${a},10/06/2026,120,,${b},10/08/2026,5400`,
+      `${b},10/08/2026,90,,${a},10/06/2026,3100`,
+      `${c},10/01/2026,40,,,,`,
+    ].join("\n");
+    const parsed = parseMetricsCsv(csv);
+    expect(parsed.errors).toEqual([]);
+    // Engagements isn't one of our metrics, so only the impressions table yields rows: each with its own URL.
+    expect(parsed.rows.map((r) => [r.url, r.impressions])).toEqual([
+      [b, 5400],
+      [a, 3100],
+    ]);
+  });
+
+  it("merges a post listed in two side-by-side tables", () => {
+    const a = "https://www.linkedin.com/feed/update/urn:li:activity:7111111111111111111/";
+    const csv = ["Post URL,Reactions,Comments,,Post URL,Impressions", `${a},48,9,,${a},1204`].join("\n");
+    const parsed = parseMetricsCsv(csv);
+    expect(parsed.rows).toHaveLength(1);
+    expect(parsed.rows[0]).toMatchObject({ url: a, reactions: 48, comments: 9, impressions: 1204 });
+  });
+
   it("explains a file it can't read", () => {
     expect(parseMetricsCsv("name,age\nAna,40").errors[0]).toMatch(/header row/);
     expect(parseMetricsCsv("Date,Reactions\n").errors[0]).toMatch(/no rows/);

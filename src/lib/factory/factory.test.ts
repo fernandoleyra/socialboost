@@ -5,8 +5,8 @@ import { cleanPost, stripUnicodeStyling } from "./clean";
 import { changeRatio, diffWords } from "./diff";
 import { aboveFold, foldIndex } from "./fold";
 import { findPillar } from "./pillars";
-import { anglesPrompt, critiquePrompt, draftPrompt, factsText, instructionsFromCritique, instructionsFromLint, languageName, presetInstruction, revisePrompt, targetWords, writingRules, type PromptContext } from "./prompts";
-import { buildQuality, combineScore, critiqueScore, hashBody, isCritiqueFresh, qualityGate, relint } from "./quality";
+import { anglesPrompt, critiquePrompt, draftPrompt, factsText, storyFacts, instructionsFromCritique, instructionsFromLint, languageName, presetInstruction, revisePrompt, targetWords, writingRules, type PromptContext } from "./prompts";
+import { buildQuality, combineScore, critiqueScore, dropUnfoundedInventions, hashBody, isCritiqueFresh, qualityGate, relint } from "./quality";
 import { fromLocalInput, nextOpenSlots, toLocalInput } from "./schedule";
 import { checkStatusChange, statusAfterGeneration, statusAfterHumanEdit } from "./status";
 import { STRUCTURES, STRUCTURE_IDS, getStructure, matchStructureId, recommendStructures } from "./structures";
@@ -68,6 +68,8 @@ describe("angles", () => {
     expect(cleanHook("Hook: We refunded €84k .")).toBe("We refunded €84k.");
     expect(replaceHook("Old hook\n\nBody stays.", "New hook ")).toBe("New hook\n\nBody stays.");
     expect(replaceHook("Old\nBody", '"Did you check the proxy?"')).toBe('"Did you check the proxy?"\nBody');
+    expect(replaceHook("\n\nOld hook\n\nRest", "New hook")).toBe("New hook\n\nRest");
+    expect(replaceHook("", "New hook")).toBe("New hook");
     expect(normalizeAngles([{ hook: '"Did you check the proxy?"', hookType: "dialogue", structureId: "meeting" }], "scene-lesson")[0].hook).toBe('"Did you check the proxy?"');
     expect(hookOf("\n\n  First line  \nSecond")).toBe("First line");
   });
@@ -115,6 +117,14 @@ describe("cleanPost", () => {
   it("keeps real content that only looks like a preamble", () => {
     expect(cleanPost("Here's what I learned after 60 hires:\n\n1. Ask.")).toBe("Here's what I learned after 60 hires:\n\n1. Ask.");
     expect(cleanPost("Story.\n\nLet me know if you've seen this in your team.")).toBe("Story.\n\nLet me know if you've seen this in your team.");
+  });
+
+  it("removes skeleton step names a small model printed", () => {
+    expect(cleanPost("**Hook:** Last Tuesday I lost a client.\n\nTension: We had one week.\n\nClose: Which would you pick?")).toBe("Last Tuesday I lost a client.\n\nWe had one week.\n\nWhich would you pick?");
+    expect(cleanPost("Hook:\nLast Tuesday I lost a client.\n\nIt hurt.")).toBe("Last Tuesday I lost a client.\n\nIt hurt.");
+    // One label in a real post stays; so do Before/After, which people write themselves.
+    expect(cleanPost("We shipped it.\n\nTakeaway: ask early.")).toBe("We shipped it.\n\nTakeaway: ask early.");
+    expect(cleanPost("Before: 3 hours.\nAfter: 20 minutes.")).toBe("Before: 3 hours.\nAfter: 20 minutes.");
   });
 
   it("hides an unfinished think block while streaming", () => {
@@ -236,6 +246,9 @@ const ctx = (over: Partial<PromptContext> = {}): PromptContext => ({
   ...over,
 });
 
+const all = (p: { messages: { content: string }[] }) => p.messages.map((m) => m.content).join("\n");
+const last = (p: { messages: { content: string }[] }) => p.messages[p.messages.length - 1].content;
+
 describe("prompts", () => {
   it("names languages", () => {
     expect(languageName("de")).toBe("German");
@@ -243,28 +256,39 @@ describe("prompts", () => {
     expect(languageName("xx")).toBe("xx");
   });
 
-  it("puts facts first and numbered rules last in the draft prompt", () => {
+  it("gives the notes their own turn and ends on the task with numbered rules", () => {
     const p = draftPrompt(ctx(), { hook: "7:40, Basel office.", hookType: "scene", structureId: "scene-lesson", takeaway: "Ask early.", whyItWorks: "" }, "scene-lesson");
     expect(p.system).toContain("Ana Ruiz");
-    const u = p.user;
-    expect(u.indexOf("THE STORY")).toBeLessThan(u.indexOf("RULES"));
-    expect(u.indexOf("EXAMPLES OF POSTS I WROTE")).toBeLessThan(u.indexOf("RULES"));
-    expect(u.trim().endsWith("Output only the post text.")).toBe(true);
-    expect(u).toContain('"Did you check the proxy?"');
-    expect(u).toContain("Hook idea");
-    expect(u).toContain("No emojis.");
-    expect(u).toContain("Do not use em dashes");
-    expect(u).toContain("Write in English.");
-    expect(u).not.toMatch(/json/i);
+    expect(p.messages.map((m) => m.role)).toEqual(["user", "assistant", "user", "assistant", "user"]);
+    expect(p.messages[0].content).toContain("<notes>");
+    expect(p.messages[0].content).toContain('"Did you check the proxy?"');
+    expect(p.messages[2].content).toContain("<example 1>");
+    const task = last(p);
+    expect(task).not.toContain("<notes>");
+    expect(task).toContain('Start the post with this exact first line: "7:40, Basel office."');
+    expect(task.indexOf("Follow this structure")).toBeLessThan(task.indexOf("Rules:"));
+    expect(task.trim().endsWith("Output only the post text.")).toBe(true);
+    expect(task).toContain("No emojis.");
+    expect(task).toContain("Do not use em dashes");
+    expect(task).toContain("Do not copy whole sentences from my notes");
+    expect(task).toContain("Write in English.");
+    expect(all(p)).not.toMatch(/json/i);
+  });
+
+  it("skips the examples turn when there are no samples", () => {
+    const p = draftPrompt(ctx({ examples: [] }), null, "how-i-do");
+    expect(p.messages).toHaveLength(3);
+    expect(last(p)).not.toContain("exact first line");
+    expect(last(p)).toContain("How I actually did it");
   });
 
   it("adapts rules to the voice baseline", () => {
     const rules = writingRules(ctx({ stats: stats({ emojiPerPost: 2, hashtagsPerPost: 3, emDashPerPost: 1 }) }), getStructure("result-lessons"));
-    const all = rules.join("\n");
-    expect(all).toContain("at most 2 emoji");
-    expect(all).toContain("At most 3 hashtags");
-    expect(all).toContain("Use dashes sparingly");
-    expect(all).toContain("numbered list");
+    const text = rules.join("\n");
+    expect(text).toContain("at most 2 emoji");
+    expect(text).toContain("At most 3 hashtags");
+    expect(text).toContain("Use dashes sparingly");
+    expect(text).toContain("numbered list");
   });
 
   it("targets the user's usual length when there are enough samples", () => {
@@ -274,17 +298,25 @@ describe("prompts", () => {
 
   it("works without voice samples or a memory", () => {
     const p = revisePrompt(ctx({ memory: null, examples: [], voiceBlock: "" }), "My draft.", ["Shorter."]);
-    expect(p.user).toContain("No story card is linked");
-    expect(p.user).toContain("No samples of my writing yet");
-    expect(p.user).toContain("1. Shorter.");
-    expect(p.user).not.toContain("EXAMPLES OF POSTS");
+    expect(all(p)).toContain("No notes for this post");
+    expect(last(p)).toContain("No samples of my writing yet");
+    expect(last(p)).toContain("1. Shorter.");
+    expect(last(p)).toContain("<post>\nMy draft.\n</post>");
+    expect(all(p)).not.toContain("<example");
+  });
+
+  it("keeps an existing numbered list when revising, unless asked to remove it", () => {
+    const listPost = "Three things I learned.\n\n1. Ask early.\n2. Write it down.\n3. Call back.";
+    expect(last(revisePrompt(ctx(), listPost, ["Make it warmer."]))).toContain("Keep the numbered list");
+    expect(last(revisePrompt(ctx(), listPost, [presetInstruction("nolist", null)!]))).toContain("no lists");
+    expect(last(revisePrompt(ctx(), "A story without a list.", ["Shorter."]))).toContain("no lists");
   });
 
   it("lists every structure and the recommended fits in the angles prompt", () => {
     const p = anglesPrompt(ctx(), ["mistake-fix", "scene-lesson"]);
-    for (const s of STRUCTURES) expect(p.user).toContain(s.id);
-    expect(p.user).toContain("Good fits for this story: mistake-fix, scene-lesson.");
-    expect(p.user).toContain("CIOs of mid-size banks");
+    for (const s of STRUCTURES) expect(last(p)).toContain(s.id);
+    expect(last(p)).toContain("Good fits for this story: mistake-fix, scene-lesson.");
+    expect(last(p)).toContain("CIOs of mid-size banks");
   });
 
   it("feeds automatic findings into the critique", () => {
@@ -292,9 +324,10 @@ describe("prompts", () => {
       { rule: "em-dash", severity: "error", message: "Em dashes read as AI." },
       { rule: "double-space", severity: "info", message: "Double space." },
     ]);
-    expect(p.user).toContain("- Em dashes read as AI.");
-    expect(p.user).not.toContain("Double space.");
-    expect(p.user).toContain("Invented:");
+    expect(last(p)).toContain("- Em dashes read as AI.");
+    expect(last(p)).not.toContain("Double space.");
+    expect(last(p)).toContain("Invented:");
+    expect(last(p)).toContain("repeats the notes sentence by sentence");
   });
 
   it("collects facts for the provenance check", () => {
@@ -316,6 +349,7 @@ describe("prompts", () => {
     expect(out).toContain("Remove every em dash and en dash. Use a period or a comma instead.");
     expect(out.some((s) => s.includes('"312"'))).toBe(true);
     expect(out).toHaveLength(3);
+    expect(instructionsFromLint([{ rule: "copied-notes", severity: "error", message: "" }])[0]).toContain("Don't paste my notes");
     expect(instructionsFromCritique(crit(5, { issues: ['Invented: "312 customers"', "Weak hook"], suggestions: ["Open on the timeout."] }))).toEqual(['Remove this invented detail: "312 customers"', "Open on the timeout."]);
   });
 
@@ -341,18 +375,23 @@ describe("diff", () => {
 /* ------------------------------------------------------------------ */
 
 describe("schedule", () => {
-  it("suggests open cadence slots a day apart", () => {
-    const now = new Date(2026, 9, 10, 12, 0); // Saturday 10 Oct 2026, local time
-    const slots = nextOpenSlots({ days: [2, 3, 4], time: "08:30" }, [new Date(2026, 9, 13, 9, 0).toISOString()], now, 3);
-    expect(slots.map((d) => [d.getDate(), d.getHours(), d.getMinutes()])).toEqual([
-      [14, 8, 30],
-      [15, 8, 30],
-      [20, 8, 30],
-    ]);
+  it("suggests open cadence slots in the profile's time zone, one post per day", () => {
+    const now = new Date("2026-10-10T12:00:00Z"); // Saturday
+    const cadence = { postsPerWeek: 3, days: [2, 3, 4], time: "08:30" };
+    // Tuesday already has a planned idea (the Calendar's auto-planner put it there).
+    const taken = [{ id: "p1", at: "2026-10-13T06:30:00Z" }];
+    const slots = nextOpenSlots({ cadence, timezone: "Europe/Madrid", taken, now, count: 3 });
+    expect(slots.map((d) => d.toISOString())).toEqual(["2026-10-14T06:30:00.000Z", "2026-10-15T06:30:00.000Z", "2026-10-20T06:30:00.000Z"]);
+  });
+
+  it("thins posting days to posts per week, like the Calendar", () => {
+    const now = new Date("2026-10-10T12:00:00Z");
+    const slots = nextOpenSlots({ cadence: { postsPerWeek: 2, days: [1, 2, 3, 4, 5], time: "09:00" }, timezone: "UTC", taken: [], now, count: 4 });
+    expect(new Set(slots.map((d) => d.getUTCDay())).size).toBe(2);
   });
 
   it("falls back to a default cadence", () => {
-    expect(nextOpenSlots(null, [], new Date(2026, 9, 10, 12, 0), 1)[0].getDay()).toBe(2);
+    expect(nextOpenSlots({ cadence: null, timezone: "UTC", taken: [], now: new Date("2026-10-10T12:00:00Z"), count: 1 })[0].getUTCDay()).toBe(2);
   });
 
   it("round-trips datetime-local values", () => {
@@ -394,5 +433,35 @@ describe("pillars", () => {
     expect(findPillar(strategy, " field NOTES ")?.id).toBe("p1");
     expect(findPillar(strategy, "nope")).toBeNull();
     expect(findPillar(null, "p1")).toBeNull();
+  });
+});
+
+describe("prompt echo", () => {
+  it("strips an echo of the notes labels and their lists", () => {
+    const echoed = 'The export died at 7:40.\n\nMarta fixed it.\n\nThings said, word for word (only these may be quoted):\n- "Did you check the proxy?"\n\nHow I felt: panic, relief\n\nWhat I learned: Ask early.';
+    expect(cleanPost(echoed)).toBe("The export died at 7:40.\n\nMarta fixed it.");
+    expect(cleanPost("<post>\nThe body.\n</post>")).toBe("The body.");
+  });
+
+  it("keeps a single legitimate label-like line", () => {
+    expect(cleanPost("A story.\n\nDetails: we shipped on Friday.")).toBe("A story.\n\nDetails: we shipped on Friday.");
+  });
+});
+
+describe("critic guard", () => {
+  it("drops 'invented' claims that are in the notes", () => {
+    const c = dropUnfoundedInventions(crit(7, { issues: ["Invented: 'I had promised the COO a prototype by 8:00.'", 'Invented: "312 customers"', "Hook is long."] }), "I had promised the COO a working prototype by 8:00 in Basel.");
+    expect(c.issues).toEqual(['Invented: "312 customers"', "Hook is long."]);
+  });
+});
+
+describe("storyFacts", () => {
+  it("splits the narrative into one fact per line, keeping quotes whole", () => {
+    expect(storyFacts('At 7:40 the export died. Marta asked: "Did you check the proxy?" I hadn\'t. Fixed in 4.5 minutes')).toEqual([
+      "At 7:40 the export died.",
+      'Marta asked: "Did you check the proxy?"',
+      "I hadn't.",
+      "Fixed in 4.5 minutes",
+    ]);
   });
 });

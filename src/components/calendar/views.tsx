@@ -5,7 +5,7 @@ import { Plus } from "lucide-react";
 import { cx } from "@/components/ui";
 import type { Slot } from "@/lib/calendar/slots";
 import type { CalendarData, CalendarPost } from "@/lib/calendar/types";
-import type { DayKey } from "@/lib/calendar/time";
+import { weekdayOf, type DayKey } from "@/lib/calendar/time";
 import { dayOfMonth, formatDayLong, monthGrid, weekKeys, weekdayLabels } from "@/lib/calendar/view";
 import { PillarDot, pillarById } from "./helpers";
 import { CardPill, CompactPill, DRAG_TYPE, RowPill } from "./post-pill";
@@ -104,6 +104,8 @@ function MonthCell({
   return (
     <div
       {...drop.handlers}
+      role="gridcell"
+      aria-selected={selected}
       className={cx(
         "relative min-w-0 border-separator transition-colors",
         "h-[58px] sm:h-auto sm:min-h-[124px]",
@@ -114,16 +116,20 @@ function MonthCell({
       {/* Phone: the whole cell selects the day. */}
       <button type="button" className="absolute inset-0 sm:hidden focus-ring" aria-label={formatDayLong(day, LOCALE)} aria-pressed={selected} onClick={() => onSelectDay(day)} />
       <div className="pointer-events-none flex items-center justify-center pt-1.5 sm:pointer-events-auto sm:justify-end sm:px-1.5">
-        <span
+        <button
+          type="button"
+          tabIndex={-1}
+          onClick={() => onShowDay(day)}
+          title="Show this week"
           className={cx(
-            "grid size-7 place-items-center rounded-full t-footnote font-semibold tabular-nums",
-            isToday ? "bg-[var(--accent-fill,var(--accent))] text-white" : selected ? "bg-fill-2" : "",
+            "grid size-7 place-items-center rounded-full t-footnote font-semibold tabular-nums sm:hover:bg-fill-3",
+            isToday ? "bg-[var(--accent-fill,var(--accent))] text-white sm:hover:bg-[var(--accent-fill,var(--accent))]" : selected ? "bg-fill-2 sm:bg-transparent" : "",
             !isToday && (!inMonth || isPast) && "text-label-3",
           )}
-          aria-label={isToday ? "Today" : undefined}
+          aria-label={`${formatDayLong(day, LOCALE)}${isToday ? ", today" : ""}. Show this week.`}
         >
           {dayOfMonth(day)}
-        </span>
+        </button>
       </div>
       {/* Phone: dots. */}
       <div className="pointer-events-none mt-1 flex justify-center gap-[3px] sm:hidden">
@@ -189,9 +195,14 @@ export function DayAgenda({ day, data, onOpenPost, onOpenSlot }: { day: DayKey; 
   const slot = openSlotsByDay(data.slots).get(day);
   return (
     <section className="space-y-2 sm:hidden" aria-label={formatDayLong(day, LOCALE)}>
-      <h3 className="px-1 t-footnote font-semibold uppercase tracking-wide text-label-2">{formatDayLong(day, LOCALE)}</h3>
+      {/* Server and browser ICU can word dates slightly differently; the browser's version wins. */}
+      <h3 className="px-1 t-footnote font-semibold uppercase tracking-wide text-label-2" suppressHydrationWarning>
+        {formatDayLong(day, LOCALE)}
+      </h3>
       {posts.length === 0 && !slot ? (
-        <div className="card px-4 py-5 text-center t-subhead text-label-2">Nothing planned. {day < data.todayKey ? "" : "Not a posting day."}</div>
+        <div className="card px-4 py-5 text-center t-subhead text-label-2">
+          {day < data.todayKey ? "Nothing went out this day." : data.cadence.postingDays.includes(weekdayOf(day)) ? "Nothing planned." : "Nothing planned. Not one of your posting days."}
+        </div>
       ) : (
         <div className="card list-group">
           {posts.map((post) => (
@@ -222,7 +233,7 @@ function WeekColumn({ day, posts, slot, ...p }: ViewProps & { day: DayKey; posts
   const drop = useDropTarget(day, data.todayKey, p.dragging, p.onDropDay);
   const weekday = new Intl.DateTimeFormat(LOCALE, { weekday: "short", timeZone: "UTC" }).format(new Date(`${day}T12:00:00Z`));
   let body: ReactNode;
-  if (posts.length === 0 && !slot) body = <div className="hidden flex-1 items-center justify-center py-6 t-caption text-label-3 md:flex">{isPast ? "" : "Rest day"}</div>;
+  if (posts.length === 0 && !slot) body = <div className="flex flex-1 items-center px-1 t-caption text-label-3 md:justify-center md:py-6">{isPast ? "" : "Rest day"}</div>;
   else
     body = (
       <>

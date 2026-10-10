@@ -1,5 +1,6 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
+import { Agent } from "undici";
 import { z } from "zod";
 import { getRoute, getAISettings } from "./settings";
 import type { ModelTask, ProviderConfig } from "./types";
@@ -49,6 +50,16 @@ function resolve(task: ModelTask) {
 }
 
 const trimSlash = (u: string) => u.replace(/\/+$/, "");
+
+/**
+ * Local models on CPU can take minutes before the first byte (model load + prompt processing).
+ * Node's fetch gives up after 300 s without headers, so model calls use a dispatcher without
+ * header/body timeouts; callers bound the wait with their own AbortSignal instead.
+ */
+const patient = new Agent({ headersTimeout: 0, bodyTimeout: 0, keepAliveTimeout: 30_000 });
+function modelFetch(url: string, init: RequestInit): Promise<Response> {
+  return fetch(url, { ...init, dispatcher: patient } as RequestInit);
+}
 
 /** Strip reasoning blocks some local models emit inline. */
 export function stripThinking(text: string): string {
@@ -129,7 +140,7 @@ async function ollamaChat(
     ...(extra.format ? { format: extra.format } : {}),
   };
   const send = (b: Record<string, unknown>) =>
-    fetch(`${trimSlash(provider.baseUrl)}/api/chat`, {
+    modelFetch(`${trimSlash(provider.baseUrl)}/api/chat`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(b),
@@ -188,6 +199,34 @@ async function* readSse(res: Response): AsyncGenerator<string> {
   }
 }
 
+/** Concatenate a streamed Ollama /api/chat response (used so long calls never wait silently). */
+async function collectOllama(res: Response): Promise<string> {
+  let out = "";
+  for await (const chunk of readNdjson(res)) {
+    if (chunk.error) throw new LLMError(String(chunk.error));
+    out += (chunk.message as { content?: string } | undefined)?.content ?? "";
+  }
+  return out;
+}
+
+/** Concatenate a streamed OpenAI-compatible response. Falls back to a plain JSON body. */
+async function collectOpenAI(res: Response): Promise<string> {
+  if (!(res.headers.get("content-type") ?? "").includes("event-stream")) {
+    const json = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+    return json.choices?.[0]?.message?.content ?? "";
+  }
+  let out = "";
+  for await (const data of readSse(res)) {
+    if (data === "[DONE]") break;
+    try {
+      out += JSON.parse(data).choices?.[0]?.delta?.content ?? "";
+    } catch {
+      /* keep-alive */
+    }
+  }
+  return out;
+}
+
 /* ------------------------------------------------------------------ */
 /* OpenAI-compatible                                                   */
 /* ------------------------------------------------------------------ */
@@ -234,7 +273,7 @@ async function openaiChat(
   let last: Response | null = null;
   for (const body of attempts) {
     try {
-      last = await fetch(`${trimSlash(provider.baseUrl)}/chat/completions`, {
+      last = await modelFetch(`${trimSlash(provider.baseUrl)}/chat/completions`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -390,14 +429,12 @@ export async function chat(opts: ChatOptions): Promise<string> {
   const { route, provider, numCtx } = resolve(opts.task);
   const temperature = opts.temperature ?? route.temperature;
   if (provider.kind === "ollama") {
-    const res = await ollamaChat(provider, route.model, opts, { stream: false, numCtx, temperature });
-    const json = (await res.json()) as { message?: { content?: string } };
-    return stripThinking(json.message?.content ?? "");
+    const res = await ollamaChat(provider, route.model, opts, { stream: true, numCtx, temperature });
+    return stripThinking(await collectOllama(res));
   }
   if (provider.kind === "openai") {
-    const res = await openaiChat(provider, route.model, opts, { stream: false, temperature });
-    const json = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-    return stripThinking(json.choices?.[0]?.message?.content ?? "");
+    const res = await openaiChat(provider, route.model, opts, { stream: true, temperature });
+    return stripThinking(await collectOpenAI(res));
   }
   let out = "";
   for await (const piece of chatStream(opts)) out += piece;
@@ -455,11 +492,11 @@ export async function chatJson<T>(schema: z.ZodType<T>, opts: ChatOptions): Prom
     const o = { ...opts, messages };
     let raw: string;
     if (provider.kind === "ollama") {
-      const res = await ollamaChat(provider, route.model, o, { stream: false, format: jsonSchema, numCtx, temperature });
-      raw = ((await res.json()) as { message?: { content?: string } }).message?.content ?? "";
+      const res = await ollamaChat(provider, route.model, o, { stream: true, format: jsonSchema, numCtx, temperature });
+      raw = await collectOllama(res);
     } else if (provider.kind === "openai") {
-      const res = await openaiChat(provider, route.model, o, { stream: false, jsonSchema, temperature });
-      raw = ((await res.json()) as { choices?: { message?: { content?: string } }[] }).choices?.[0]?.message?.content ?? "";
+      const res = await openaiChat(provider, route.model, o, { stream: true, jsonSchema, temperature });
+      raw = await collectOpenAI(res);
     } else {
       const client = anthropicClient(provider);
       try {
@@ -516,7 +553,7 @@ export async function embed(texts: string[], opts: { kind?: "query" | "document"
   const signal = AbortSignal.timeout(opts.timeoutMs ?? 60000);
   try {
     if (provider.kind === "ollama") {
-      const res = await fetch(`${trimSlash(provider.baseUrl)}/api/embed`, {
+      const res = await modelFetch(`${trimSlash(provider.baseUrl)}/api/embed`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ model: route.model, input, keep_alive: "15m" }),
@@ -527,7 +564,7 @@ export async function embed(texts: string[], opts: { kind?: "query" | "document"
       return json.embeddings ?? null;
     }
     if (provider.kind === "openai") {
-      const res = await fetch(`${trimSlash(provider.baseUrl)}/embeddings`, {
+      const res = await modelFetch(`${trimSlash(provider.baseUrl)}/embeddings`, {
         method: "POST",
         headers: { "content-type": "application/json", ...(provider.apiKey ? { authorization: `Bearer ${provider.apiKey}` } : {}) },
         body: JSON.stringify({ model: route.model, input }),
@@ -578,7 +615,7 @@ export async function transcribe(file: Blob, filename: string): Promise<string> 
   form.append("model", route.model);
   let res: Response;
   try {
-    res = await fetch(`${trimSlash(provider.baseUrl)}/audio/transcriptions`, {
+    res = await modelFetch(`${trimSlash(provider.baseUrl)}/audio/transcriptions`, {
       method: "POST",
       headers: provider.apiKey ? { authorization: `Bearer ${provider.apiKey}` } : {},
       body: form,

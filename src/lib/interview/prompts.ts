@@ -72,6 +72,7 @@ function aboutBlock(ctx: InterviewContext): string {
   const who = [ctx.headline, ctx.positioning].filter(Boolean).join(". ");
   if (who) lines.push(`About ${first}: ${truncate(who, 300)}`);
   if (ctx.audience) lines.push(`Their readers: ${truncate(ctx.audience, 200)}`);
+  if (ctx.kind === "story" && ctx.goals.length) lines.push(`What they want from LinkedIn: ${truncate(ctx.goals.slice(0, 3).join("; "), 160)}`);
   if (ctx.kind === "story" && ctx.pillar) lines.push(`Today's theme: ${ctx.pillar.name}${ctx.pillar.description ? ` (${truncate(ctx.pillar.description, 160)})` : ""}`);
   if (ctx.savedTitles.length) lines.push(`Stories already saved (find a different moment): ${ctx.savedTitles.slice(0, 10).map((t) => truncate(t, 60)).join("; ")}`);
   if (ctx.earlierThreads.length) lines.push(`Earlier today they told you about: ${ctx.earlierThreads.map((t) => truncate(t, 90)).join("; ")}`);
@@ -160,7 +161,7 @@ export function directorNote(ctx: InterviewContext, d: Decision, mode: NoteMode 
         : `They shared a photo for this story. Thank them in a few words. Then ask what one line they'd tell a friend about this photo.${like}`;
     case "wrap":
       return mode === "protocol"
-        ? `The story is complete. Write ONE or two short sentences that reflect back the heart of it (the moment and what changed), using ${first}'s words. No question, no advice, no praise.`
+        ? `The story is complete. Write ONE or two short sentences that reflect back the heart of it (the moment and what changed), using ${first}'s words. Only use what ${first} told you. No question, no advice, no praise.`
         : `This story is complete. In 2 or 3 short sentences: thank ${first} for the story${
             d.photoDeferred ? ", say it's fine to add the photo later and you'll remind them" : ""
           }, and say they can tap ${finishStory} to save it, or tell you about another moment. Don't ask anything else.`;
@@ -293,7 +294,7 @@ const TARGET_WORDS: Record<string, RegExp> = {
   turning: /\b(moment|click(ed)?|chang\w*|reali[sz]\w*|turn\w*|shift\w*|before|opposite|exactly when|decid\w*|notic\w*)\b/i,
   details: /\b(how (much|many|long|big)|numbers?|figures?|cost|see|saw|hear|heard|smell\w*|look like|screen|details?|exactly|objects?|room)\b/i,
   feelings: /\b(feel|felt|feeling|head|think|thought|mind|react\w*|emotion\w*|nervous|scared|stomach|heart)\b/i,
-  lesson: /\b(learn\w*|lesson|teach|tell|advice|takeaway|differently|now|matter\w*|someone|others|new hire|monday|rule)\b/i,
+  lesson: /\b(learn\w*|lesson|teach\w*|advice|takeaway|differently|rule|new hire|monday|would you tell|tell (someone|others|a friend|people|your younger)|someone (else|in)|others|matter\w*|why did|since then|do now)\b/i,
   privacy: /\b(confidential|anonym\w*|private|names?|permission|share|mention|public)\b/i,
   specific: /\b(last time|specific|one time|example|instance|particular|recent\w*|that day|happened)\b/i,
   goals: /\b(linkedin|goals?|want|hope|achieve|clients?|hir\w*|investors?|speak\w*|job|matters?|success|outcome)\b/i,
@@ -324,8 +325,19 @@ function renderUserMessage(m: TranscriptMessage): string {
 /**
  * Chat messages for the interviewer: a synthetic "ready" turn (so the conversation always
  * starts with the user), the current thread (last 16 messages), then the director's note.
+ *
+ * The note goes in a trailing system message (Ollama and Anthropic handle that well). Some
+ * OpenAI-compatible servers run chat templates that reject a system message after the first
+ * turn (Mistral templates in LM Studio, llama.cpp, vLLM), so with `noteInUserTurn` it is
+ * appended to the last user turn instead.
  */
-export function interviewerMessages(ctx: InterviewContext, thread: TranscriptMessage[], decision: Decision, mode: NoteMode = "protocol") {
+export function interviewerMessages(
+  ctx: InterviewContext,
+  thread: TranscriptMessage[],
+  decision: Decision,
+  mode: NoteMode = "protocol",
+  opts: { noteInUserTurn?: boolean } = {},
+) {
   const recent = thread.slice(-16);
   const msgs: { role: "user" | "assistant" | "system"; content: string }[] = [];
   if (recent[0]?.role !== "user") msgs.push({ role: "user", content: OPENING_TURN });
@@ -337,7 +349,13 @@ export function interviewerMessages(ctx: InterviewContext, thread: TranscriptMes
     else msgs.push({ role: m.role, content });
   }
   if (msgs[msgs.length - 1]?.role !== "user") msgs.push({ role: "user", content: "(continue)" });
-  msgs.push({ role: "system", content: `Director's note for your next message:\n${directorNote(ctx, decision, mode)}` });
+  const note = directorNote(ctx, decision, mode);
+  if (opts.noteInUserTurn) {
+    const last = msgs[msgs.length - 1];
+    last.content += `\n\n[Director's note for your next message. It comes from the ghostwriter, not from ${firstName(ctx.name)}. Don't mention it.]\n${note}`;
+  } else {
+    msgs.push({ role: "system", content: `Director's note for your next message:\n${note}` });
+  }
   return msgs;
 }
 
@@ -377,7 +395,7 @@ Rules:
 1. Use ONLY facts ${first} said. If something wasn't said, leave the field empty ("" or []). Never guess.
 2. title: 3 to 8 words naming what happened, like a file label (e.g. "Payroll export failed before Christmas"). Not a headline. Don't use ${first}'s name.
 3. summary: 1 or 2 plain sentences.
-4. story: retell it in first person as ${first}, in time order, 100 to 300 words. Keep their own words and phrases. Leave out the interviewer's questions. Don't add a moral they didn't say.
+4. story: retell it in first person as ${first}, in time order, at most 300 words. Keep their own words and phrases. Leave out the interviewer's questions. If they said little, keep it short. Never fill gaps, and don't add a moral they didn't say.
 5. when and place: exactly as they said them.
 6. people: names or roles of the people in it. If they asked to keep someone anonymous, use a role instead of the name.
 7. emotions: feelings they mentioned, one or two words each.
@@ -413,16 +431,15 @@ Rules:
 7. offers: what they sell or want to be known for.
 8. beliefs: things they believe about their field, in their words.
 9. contrarianTakes: opinions most peers would dispute.
-10. pillars: 3 or 4 content pillars. Each has a name (2 to 4 words), a description (one sentence: what these posts are about and why the readers care), and storyPrompts: 3 questions to ask ${first} later to get REAL stories for this pillar, like "When did a client last surprise you?".
-11. avoidTopics: topics they don't want to post about.
-12. cta: what a reader should do after reading, or "".
-13. postsPerWeek: the number they mentioned, or 0.
-14. notes: tone, humour, words they never use, anything else useful for a ghostwriter. 1 to 3 sentences.
+10. avoidTopics: topics they said they don't want to post about. Don't invent any.
+11. cta: what a reader should do after reading, or "".
+12. postsPerWeek: the number they mentioned, or 0.
+13. notes: tone, humour, words they never use, anything else useful for a ghostwriter. 1 to 3 sentences.
 Write the text in ${languageName(input.language)}.`;
   return { system, user };
 }
 
-/** Second, focused attempt when the strategy came back without pillars. */
+/** Content pillars from the strategy summary (second finish call). */
 export function pillarsPrompt(input: { name: string; language: string; summary: string }) {
   const first = firstName(input.name);
   return {
@@ -430,10 +447,13 @@ export function pillarsPrompt(input: { name: string; language: string; summary: 
     user: `Here is what we know about ${first}:
 ${input.summary}
 
-Propose 3 or 4 content pillars for ${first}'s LinkedIn. Each pillar has:
-- name: 2 to 4 words
-- description: one sentence (what the posts are about, why readers care)
-- storyPrompts: 3 questions to ask ${first} to get real stories for this pillar
+Propose 3 or 4 content pillars for ${first}'s LinkedIn.
+Rules:
+1. Build each pillar from what ${first} actually said: their expertise, offer, beliefs and audience. No generic pillars like "Leadership" or "Motivation" unless they talked about it.
+2. The pillars must be clearly different from each other. Never build one on an off-limits topic.
+3. name: 2 to 4 words.
+4. description: one sentence: what the posts are about and why their readers care.
+5. storyPrompts: 3 questions that ask ${first} about ONE specific past moment for this pillar, like "When did a client last ...? What exactly happened?". Never ask for opinions or habits.
 Write in ${languageName(input.language)}.`,
   };
 }

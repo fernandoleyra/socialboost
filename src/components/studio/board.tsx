@@ -4,9 +4,10 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { CalendarDays, CheckCircle2, MessageSquare, Plus, Sparkles, ThumbsUp, AlertTriangle } from "lucide-react";
 import { Chip, EmptyState, Segmented, cx } from "@/components/ui";
+import { publishingSince } from "@/lib/calendar/linkedin-format";
 import { BOARD_COLUMNS } from "@/lib/factory/status";
 import type { PostStatus } from "@/lib/types";
-import { MissingPhotoTile, NeedsPhotoChip, PillarChip, ScoreRing, StatusChip, formatWhen, photoSrc, relativeTime, type PillarLite } from "./shared";
+import { MissingPhotoTile, NeedsPhotoChip, PillarChip, ScoreRing, StatusChip, When, photoSrc, type PillarLite } from "./shared";
 
 export type BoardItem = {
   id: string;
@@ -53,7 +54,7 @@ function PostCard({ item }: { item: BoardItem }) {
           {item.scheduledAt && item.status !== "published" && (
             <Chip tone={item.status === "scheduled" ? "indigo" : "gray"}>
               <CalendarDays className="size-3" />
-              {formatWhen(item.scheduledAt, { withTime: item.status === "scheduled" })}
+              <When iso={item.scheduledAt} withTime={item.status === "scheduled"} />
             </Chip>
           )}
           {item.ready && item.status === "review" && (
@@ -62,10 +63,10 @@ function PostCard({ item }: { item: BoardItem }) {
               Passed checks
             </Chip>
           )}
-          {item.error && (
-            <Chip tone="red">
+          {item.error && item.status !== "published" && (
+            <Chip tone={publishingSince(item.error) ? "blue" : "red"}>
               <AlertTriangle className="size-3" />
-              Publish failed
+              {publishingSince(item.error) ? "Publishing" : "Publish failed"}
             </Chip>
           )}
         </div>
@@ -90,7 +91,7 @@ function ListRow({ item, view }: { item: BoardItem; view: View }) {
       <div className="min-w-0 flex-1">
         <p className="t-subhead font-medium truncate">{title}</p>
         <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 t-caption text-label-2">
-          {when && <span>{view === "archived" ? `Archived ${relativeTime(when)}` : formatWhen(when)}</span>}
+          {when && <span>{view === "archived" ? <>Archived <When iso={when} relative /></> : <When iso={when} />}</span>}
           {item.pillar && <span className="truncate">· {item.pillar.name}</span>}
           {view === "published" && (item.reactions !== null || item.comments !== null) && (
             <span className="inline-flex items-center gap-2">

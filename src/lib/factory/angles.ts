@@ -32,10 +32,11 @@ export const AngleSchema = z.object({
 });
 export type Angle = z.infer<typeof AngleSchema>;
 
-export const AnglesResponseSchema = z.object({ angles: z.array(AngleSchema).min(1).max(5) });
+/** No upper bound on purpose: a model that returns six angles is fine, `normalizeAngles` keeps three. */
+export const AnglesResponseSchema = z.object({ angles: z.array(AngleSchema).min(1) });
 
 export const HooksResponseSchema = z.object({
-  hooks: z.array(z.object({ text: z.string(), type: z.enum(HOOK_TYPES) })).min(1).max(8),
+  hooks: z.array(z.object({ text: z.string(), type: z.enum(HOOK_TYPES) })).min(1),
 });
 export type HookOption = z.infer<typeof HooksResponseSchema>["hooks"][number];
 
@@ -132,9 +133,10 @@ export function normalizeAngles(raw: unknown[], fallback: StructureId, max = 3):
 /** Replace the first line (the hook) of a post, keeping everything after it. */
 export function replaceHook(body: string, hook: string): string {
   const clean = cleanHook(hook, { keepQuotes: true });
-  const nl = body.indexOf("\n");
-  if (nl < 0) return clean;
-  return clean + body.slice(nl);
+  // The hook is the first non-empty line; blank lines above it are dropped with it.
+  const m = /^\s*[^\n]*/.exec(body);
+  if (!m || !m[0].trim()) return body.trim() ? `${clean}\n\n${body.trimStart()}` : clean;
+  return clean + body.slice(m[0].length);
 }
 
 /** First non-empty line, used as the post's hook preview everywhere. */

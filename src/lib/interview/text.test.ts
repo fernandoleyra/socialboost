@@ -36,6 +36,16 @@ describe("answer classification", () => {
     expect(isDoneSignal("eso es todo")).toBe(true);
     expect(isDoneSignal("That's it, the client walked out and we never heard from them again after that awful meeting")).toBe(false);
     expect(isDoneSignal("We were done by noon")).toBe(false);
+    expect(isDoneSignal("That's it for now, thanks!")).toBe(true);
+    expect(isDoneSignal("I'm done")).toBe(true);
+    expect(isDoneSignal("Let's stop here")).toBe(true);
+    // Real answers that only start like a done phrase keep the interview going.
+    expect(isDoneSignal("No more than ten people")).toBe(false);
+    expect(isDoneSignal("I'm good at reading the room")).toBe(false);
+    expect(isDoneSignal("Not really, it was just me")).toBe(false);
+    expect(isDoneSignal("Nope, nobody else was there")).toBe(false);
+    expect(isDoneSignal("I want to stop hiring juniors")).toBe(false);
+    expect(isDoneSignal("That's all I needed to hear, he said")).toBe(false);
   });
 
   it("detects acknowledgements", () => {
@@ -48,6 +58,8 @@ describe("answer classification", () => {
     expect(isSkipAnswer("I don't remember")).toBe(true);
     expect(isSkipAnswer("no idea")).toBe(true);
     expect(isSkipAnswer("")).toBe(true);
+    expect(isSkipAnswer("Nope.")).toBe(true);
+    expect(isSkipAnswer("not really")).toBe(true);
     expect(isSkipAnswer("I don't remember the date but it was raining and the office was empty, around 7pm")).toBe(false);
     expect(isSubstantive("It was in March at our office")).toBe(true);
     expect(isSubstantive("yes")).toBe(false);
@@ -189,5 +201,15 @@ describe("formatDay", () => {
     expect(formatDay("2026-10-10 08:00:00", "UTC", { now, relative: false })).toBe("Sat, Oct 10");
     expect(formatDay("2026-10-10 08:00:00", "Not/AZone", { now, relative: false })).toBe("Sat, Oct 10");
     expect(formatDay(null, "UTC")).toBe("");
+  });
+});
+
+describe("isFiller", () => {
+  it("catches praise but keeps real reactions", () => {
+    expect(isFiller("That's a great lesson learned.")).toBe(true);
+    expect(isFiller("Great to hear.")).toBe(true);
+    expect(isFiller("What an amazing story!")).toBe(true);
+    expect(isFiller("That's a long night to be on the phone with a client.")).toBe(false);
+    expect(isFiller("A tray of croissants next to the laptop.")).toBe(false);
   });
 });

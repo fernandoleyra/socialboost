@@ -7,6 +7,7 @@
  */
 
 import type { Critique, LintIssue, PostQuality } from "@/lib/types";
+import { matchesFacts } from "./lint";
 
 export const READY_SCORE = 80;
 const MIN_DIMENSION = 6;
@@ -85,6 +86,19 @@ export function relint(prev: PostQuality | null, body: string, lint: LintIssue[]
 export function isCritiqueFresh(q: PostQuality | null, body: string): boolean {
   const f = q as Partial<FactoryQuality> | null;
   return !!(f?.critique && f.critiqueHash && f.critiqueHash === hashBody(body));
+}
+
+/**
+ * Small critic models sometimes call a real fact "invented". Drop an `Invented: "…"` issue when the
+ * quoted words are in the notes after all. Our deterministic checks own provenance anyway.
+ */
+export function dropUnfoundedInventions(c: Critique, facts: string): Critique {
+  const issues = c.issues.filter((issue) => {
+    if (!/^invented\b/i.test(issue.trim())) return true;
+    const q = /["“'‘]([^"“”'‘’]{3,})["”'’]/.exec(issue)?.[1];
+    return !q || !matchesFacts(q, facts);
+  });
+  return issues.length === c.issues.length ? c : { ...c, issues };
 }
 
 export type Gate = { ready: boolean; reasons: string[] };

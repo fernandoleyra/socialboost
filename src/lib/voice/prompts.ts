@@ -4,7 +4,7 @@
  * as facts.
  */
 import type { VoiceGuide, VoiceStats } from "@/lib/types";
-import { CLOSER_LABEL, OPENER_LABEL, type CloserType, type OpenerType } from "./text";
+import { CLOSER_LABEL, OPENER_LABEL, classifyOpener, stopwords, type CloserType, type OpenerType } from "./text";
 import type { VoiceExtras } from "./types";
 
 const pct = (r: number) => `${Math.round(r * 100)}%`;
@@ -63,7 +63,7 @@ export function statRules(stats: VoiceStats, extras: VoiceExtras | null): string
     else if (q <= 0.1) r.push("I rarely end with a question.");
     if (extras.closerTypes.statement >= 0.5) r.push("Most of my posts end on a plain last line: no moral, no call to action.");
   }
-  if (stats.firstPersonRatio >= 0.25) r.push("First person singular: I, me, my.");
+  if (stats.firstPersonRatio >= 0.25) r.push("Write in the first person singular.");
   if (extras && extras.linkRatio < 0.1) r.push("No links in the post.");
 
   const hook = extras ? dominant(extras.openerTypes) : null;
@@ -97,7 +97,8 @@ export function buildVoicePromptBlock(input: { stats: VoiceStats | null; guide: 
     if (items.length) guideLines.push(`- ${label}: ${items.join(joiner)}`);
   };
   list("Tone", g.tone, 6, ", ");
-  list("Hooks", g.hookPatterns, 3);
+  // Hook examples are real first lines; the writer gets the pattern only, so it can't borrow their facts.
+  list("Hooks", g.hookPatterns.map((x) => x.replace(/\s*[:,(]?\s*(?:e\.g\.|like)?\s*["“][^"”]*["”]\)?\.?/g, "").trim()), 3);
   list("Structure", g.structure, 3);
   list("Formatting", g.formatting, 4);
   list("Words I use", g.vocabulary, 8, ", ");
@@ -138,18 +139,21 @@ export function buildAnalysisPrompt(input: { name: string; posts: { text: string
     ...facts,
     "",
     "Write a style guide with these fields:",
-    "1. summary: 2 sentences on how this person sounds, in plain words.",
-    '2. tone: 3 to 6 short words or phrases, e.g. "dry", "direct", "self-deprecating".',
-    "3. hookPatterns: 2 to 4 ways their first line usually works, each with a short example quoted from the posts.",
+    "1. summary: 2 sentences on how this person sounds (not what they write about).",
+    '2. tone: 3 to 6 short words, e.g. "dry", "direct", "self-deprecating".',
+    '3. hookPatterns: 2 to 4 patterns for the first line. Name the pattern, then a short quoted example: Opens on a time and place: "Monday, 7 a.m., ward 4."',
     "4. structure: 2 to 4 patterns for how a post is built from top to bottom.",
     "5. formatting: 2 to 5 habits: paragraphs, lists, line breaks, punctuation, emojis, hashtags.",
-    "6. vocabulary: 3 to 8 words or phrases they really use, quoted exactly, plus any language quirks.",
-    "7. signatureMoves: 2 to 5 moves a reader would recognise, e.g. a recurring last line or a bonus point after a list.",
-    "8. neverDoes: 3 to 6 things that never appear in these posts.",
+    "6. vocabulary: 3 to 8 short phrases this person repeats or would say out loud, in double quotes. Not topic words.",
+    "7. signatureMoves: 2 to 5 moves a reader would recognise, e.g. a bonus point after a list.",
+    '8. neverDoes: 3 to 6 things that NEVER appear in these posts. Each starts with "No" or "Never".',
+    "",
+    "Example for a different writer (a nurse; do not copy it):",
+    '{"summary":"Warm and quick. Talks like she is telling a friend about her shift.","tone":["warm","playful","plain"],"hookPatterns":["Opens on a time and place: \\"Monday, 7 a.m., ward 4.\\""],"structure":["Scene, then what a patient said, then one line on what it taught her"],"formatting":["Short paragraphs of one or two sentences","Numbered lists only for real steps"],"vocabulary":["\\"honestly\\"","\\"here is the thing about night shifts\\""],"signatureMoves":["Ends by asking other nurses what they would have done"],"neverDoes":["No hashtags","Never names a patient"]}',
     "",
     "Rules:",
-    "- Base every point on the posts. Put quoted phrases in double quotes, copied exactly.",
-    "- Describe style only. Do not summarise what the posts are about.",
+    "- Base every point on the posts above. Copy quoted phrases exactly.",
+    "- Describe style only, never topics.",
     "- Each item is one line under 20 words.",
     "- Write in English; keep quotes in the language of the posts.",
   ].join("\n");
@@ -184,6 +188,59 @@ export function sanitizeGuide(g: VoiceGuide): VoiceGuide {
       .slice(0, LIMITS[k]);
   }
   return out;
+}
+
+const NEGATION = /\b(?:no|never|not|none|without|zero|avoids?|doesn['’]t|does not|don['’]t|isn['’]t|won['’]t)\b/i;
+const squash = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+const unquote = (s: string) => s.replace(/^["“'‘]+|["”'’.]+$/g, "").trim();
+
+/**
+ * Hold the guide to the posts. Small local models tend to paste whole first lines in as "hook
+ * patterns", list topic nouns as "vocabulary", and fill "never does" with things the person
+ * plainly does. Fix what can be checked against the posts; fall back to measured patterns.
+ */
+export function groundGuide(g: VoiceGuide, texts: string[], stats: VoiceStats): VoiceGuide {
+  const corpus = ` ${squash(texts.join("\n"))} `;
+  const firstLines = new Set(texts.map((t) => squash(t.split("\n").find((l) => l.trim()) ?? "")));
+  const inPosts = (s: string) => {
+    const q = squash(unquote(s));
+    return q.length > 0 && corpus.includes(` ${q} `);
+  };
+  // Every quote in the guide must be the person's own words (small models copy the prompt's example).
+  const quotesReal = (item: string) => [...item.matchAll(/["“]([^"”]{2,160})["”]/g)].every((m) => inPosts(m[1]));
+  const stop = stopwords("en");
+  const keep = (xs: string[]) => xs.filter(quotesReal);
+
+  // "Never does" must say what's absent, and can't be something the posts contain.
+  const neverDoes = g.neverDoes.filter((x) => NEGATION.test(x) && !inPosts(x));
+
+  // A bare first line is an example, not a pattern; keep only items that describe something.
+  let hookPatterns = keep(g.hookPatterns).filter((x) => !firstLines.has(squash(unquote(x))));
+  if (hookPatterns.length < 2) {
+    const byType = new Map<OpenerType, { line: string; n: number }>();
+    for (const t of texts) {
+      const line = t.split("\n").find((l) => l.trim())?.trim() ?? "";
+      if (!line) continue;
+      const type = classifyOpener(line);
+      const cur = byType.get(type);
+      byType.set(type, { line: cur?.line ?? line, n: (cur?.n ?? 0) + 1 });
+    }
+    const measured = [...byType.entries()].sort((a, b) => b[1].n - a[1].n).map(([type, { line }]) => `${OPENER_LABEL[type]}: "${clip(line.replace(/["“”]/g, "'"), 80)}"`);
+    hookPatterns = [...hookPatterns, ...measured].slice(0, 3);
+  }
+
+  // Vocabulary is phrases the person says; single topic nouns ("warehouse") teach nothing about voice.
+  const own = stats.signaturePhrases.map((p) => `"${p}"`);
+  // Quoted, short, really in the posts, and not just function words ("the same"). Unquoted
+  // whole sentences are content, and would hand the writer facts from old posts.
+  const said = keep(g.vocabulary).filter((x) => {
+    const words = squash(unquote(x)).split(" ").filter(Boolean);
+    return /^["“]/.test(x.trim()) && words.length >= 1 && words.length <= 6 && !words.every((w) => stop.has(w)) && inPosts(x);
+  });
+  const vocabulary: string[] = [];
+  for (const x of [...own, ...said]) if (!vocabulary.some((v) => squash(v) === squash(x))) vocabulary.push(x);
+
+  return { ...g, neverDoes, hookPatterns, vocabulary: vocabulary.slice(0, 8), structure: keep(g.structure), formatting: keep(g.formatting), signatureMoves: keep(g.signatureMoves) };
 }
 
 type Habit = { re: RegExp; uses: (s: VoiceStats, e: VoiceExtras | null) => boolean; absent: (s: VoiceStats, e: VoiceExtras | null) => boolean; never: string };

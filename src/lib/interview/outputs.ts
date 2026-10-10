@@ -229,6 +229,7 @@ export function extractSummary(x: PositioningExtract): string {
     x.offers.length && `Offers: ${x.offers.join("; ")}`,
     x.beliefs.length && `Beliefs: ${x.beliefs.join("; ")}`,
     x.contrarianTakes.length && `Contrarian takes: ${x.contrarianTakes.join("; ")}`,
+    x.avoidTopics.length && `Off-limits: ${x.avoidTopics.join("; ")}`,
   ];
   return lines.filter(Boolean).join("\n");
 }

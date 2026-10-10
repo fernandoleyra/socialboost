@@ -86,7 +86,15 @@ const ACTION_LINE = new RegExp(`^(?:(?:${ACTIONS})\\s*){1,4}$`, "i");
 const COUNT_WORDS =
   "comments?|reposts?|reactions?|likes?|impressions?|views?|shares?|kommentare?|reaktionen|impressionen|comentarios?|reacciones|compartidos?|commentaires?|réactions|partages?|comentários?|reações|commenti|reazioni|diffusioni";
 const COUNT_LINE = new RegExp(`^(?:[\\d.,]+\\s*[kKmM]?\\s+(?:${COUNT_WORDS})(?:\\s*[·•,]\\s*)?)+$`, "i");
-const TIME_AGO_LINE = /^[•·]?\s*\d{1,3}\s?(?:s|m|h|d|w|mo|yr|y|min|hr|std|tg|sem|j|g)\.?\s*(?:[•·]\s*(?:edited|bearbeitet|editado|modifié|modificato)?\s*)*(?:\p{Extended_Pictographic}️?)?\s*$/iu;
+const TIME_AGO = String.raw`\d{1,3}\s?(?:s|m|h|d|w|mo|yr|y|min|hr|std|tg|sem|j|g)\.?`;
+const TIME_BULLET = String.raw`\s*[•·]\s*(?:edited|bearbeitet|editado|modifié|modificato)?`;
+const TIME_END = String.raw`\s*(?:\p{Extended_Pictographic}️?)?\s*$`;
+/** "1w •", "• 2d", "3 Std. • Bearbeitet •": LinkedIn always puts a bullet next to the post's age. */
+const TIME_AGO_LINE = new RegExp(String.raw`^(?:[•·]\s*${TIME_AGO}(?:${TIME_BULLET})*|${TIME_AGO}(?:${TIME_BULLET})+)${TIME_END}`, "iu");
+/** A bare "1w" or "10 min" is only the post's age right under an author block; inside a post it's content ("24h."). */
+const BARE_TIME_LINE = new RegExp(String.raw`^${TIME_AGO}(?:${TIME_BULLET})*${TIME_END}`, "iu");
+/** "• You", "• 2nd": the connection degree only appears in the author block above a copied post. */
+const AUTHOR_MARK_LINE = /^[•·]\s*(?:you|1st|2nd|3rd\+?|du|tú|vous|você|tu)$/i;
 const OTHERS_LINE = /^.{1,80}\s+(?:and|und|y|et|e)\s+[\d.,]+\s*[kKmM]?\s+(?:others?|weitere|otras? personas|autres?|outras? pessoas|altri)$/i;
 /** Reaction counts show up as bare numbers right above the action bar; only trusted near the end of a chunk. */
 const BARE_NUMBER_LINE = /^[\d.,\s]+[kKmM]?$/;
@@ -106,8 +114,6 @@ const JUNK_LINES = [
   /^(?:your document has finished loading|document|pdf)$/i,
 ];
 
-const HEADER_END = new RegExp(`${TIME_AGO_LINE.source}|^[•·]\\s*(?:you|1st|2nd|3rd\\+?)$|^visible to anyone`, "iu");
-
 function isJunkLine(line: string): boolean {
   const t = line.trim();
   if (!t) return false;
@@ -117,7 +123,7 @@ function isJunkLine(line: string): boolean {
 /**
  * Clean one post: strip LinkedIn UI lines (action bars, counts, "…see more", "1w •"), header lines
  * matching the author's name/headline, normalize hashtags, tidy blank lines. Hashtag-only lines stay:
- * they're part of how the person writes.
+ * they're part of how the person writes. Idempotent: cleaning a cleaned post changes nothing.
  */
 export function cleanPostText(raw: string, opts: { headerLines?: string[] } = {}): { text: string; truncated: boolean } {
   let text = normalizeHashtags(normalizeText(raw));
@@ -127,26 +133,34 @@ export function cleanPostText(raw: string, opts: { headerLines?: string[] } = {}
     truncated = true;
   }
   const header = (opts.headerLines ?? []).map((h) => h.trim().toLowerCase()).filter((h) => h.length >= 2);
+  const isAuthorLine = (t: string) => header.some((h) => t === h || t.startsWith(h + " •") || t.startsWith(h + " ·"));
   const lines = text.split("\n");
   if (lines.some((l) => CUT_MARKER_LINE.test(l.trim()))) truncated = true;
   // A post copied from the feed starts with the author block (name, "• You", headline, "1w •").
-  // It always ends on the time/visibility line, so drop everything up to the last such line.
+  // It ends on the time/visibility line, so drop everything up to the last such line. A bare
+  // "10 min" only counts when an author line sits above it; otherwise it's part of the post.
   let start = 0;
-  const head = lines.slice(0, 8);
+  const head = lines.slice(0, 8).map((l) => l.trim());
   for (let i = head.length - 1; i >= 0; i--) {
-    if (HEADER_END.test(head[i].trim()) && head.slice(0, i).every((l) => l.trim().length < 120)) {
+    const above = head.slice(0, i);
+    if (!above.every((l) => l.length < 120)) continue;
+    const authorAbove = above.some((l) => AUTHOR_MARK_LINE.test(l) || isAuthorLine(l.toLowerCase()));
+    if (TIME_AGO_LINE.test(head[i]) || /^visible to anyone/i.test(head[i]) || AUTHOR_MARK_LINE.test(head[i]) || (authorAbove && BARE_TIME_LINE.test(head[i]))) {
       start = i + 1;
       break;
     }
   }
   while (start < lines.length && start < 10) {
     const t = lines[start].trim().toLowerCase();
-    if (!t || isJunkLine(t) || header.some((h) => t === h || t.startsWith(h + " •") || t.startsWith(h + " ·"))) start++;
+    if (!t || isJunkLine(t) || isAuthorLine(t)) start++;
     else break;
   }
-  const kept = lines.slice(start).filter((l) => !isJunkLine(l));
-  // Reaction counts trail the post as bare numbers; numbers inside the post stay.
-  while (kept.length && (!kept[kept.length - 1].trim() || BARE_NUMBER_LINE.test(kept[kept.length - 1].trim()))) kept.pop();
+  const body = lines.slice(start);
+  const kept = body.filter((l) => !isJunkLine(l));
+  // Reaction counts trail a copied post as bare numbers, next to the action bar and comment counts.
+  // Only strip them when such UI lines were there: a clean post may well end on "2026".
+  const hadUi = truncated || kept.length < body.length || lines.slice(0, start).some((l) => l.trim());
+  while (kept.length && (!kept[kept.length - 1].trim() || (hadUi && BARE_NUMBER_LINE.test(kept[kept.length - 1].trim())))) kept.pop();
   return { text: tidyBlankLines(kept.join("\n")), truncated };
 }
 
@@ -220,6 +234,11 @@ export function parsePastedPosts(raw: string, opts: { headerLines?: string[] } =
 /* Shares.csv                                                          */
 /* ------------------------------------------------------------------ */
 
+/** Links end up as clickable hrefs: only web links get through. */
+export function safeUrl(value: unknown): string | undefined {
+  return typeof value === "string" && /^https?:\/\/\S+$/i.test(value.trim()) ? value.trim() : undefined;
+}
+
 const normHeader = (h: string) => h.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
 const SHARES_ALIASES = {
   date: ["date", "sharedate", "createdat", "publishedat"],
@@ -260,7 +279,7 @@ export function parseSharesCsv(csv: string): ParseResult {
       continue;
     }
     const text = tidyBlankLines(normalizeLittleText(undoubleQuotes(raw)));
-    const url = cell(r, idx.link);
+    const url = safeUrl(cell(r, idx.link));
     posts.push({ text, ...(url ? { url } : {}), postedAt: parseExportDate(cell(r, idx.date)) });
   }
   if (posts.length === 0 && skipped > 0) {
@@ -275,7 +294,12 @@ export function parseSharesCsv(csv: string): ParseResult {
 
 type HelperItem = Record<string, unknown>;
 
-export function parseHelperJson(raw: string): ParseResult {
+/**
+ * JSON posts: from the browser helper, or the import preview sending back the posts the person
+ * kept. `clean: false` skips the LinkedIn-UI clean-up for texts that never had any (Shares.csv).
+ */
+export function parseHelperJson(raw: string, opts: { clean?: boolean } = {}): ParseResult {
+  const clean = opts.clean ?? true;
   let data: unknown;
   try {
     data = JSON.parse(raw.trim());
@@ -293,8 +317,8 @@ export function parseHelperJson(raw: string): ParseResult {
       skipped++;
       continue;
     }
-    const { text, truncated } = cleanPostText(rawText);
-    const url = typeof it.url === "string" && /^https?:\/\//.test(it.url) ? it.url : undefined;
+    const { text, truncated } = clean ? cleanPostText(rawText) : { text: tidyBlankLines(normalizeText(rawText)), truncated: false };
+    const url = safeUrl(it.url);
     posts.push({
       text,
       ...(url ? { url } : {}),
@@ -310,8 +334,8 @@ export function parseHelperJson(raw: string): ParseResult {
 }
 
 /** Dispatch on the import format. Throws ImportFormatError with a user-facing message. */
-export function parseImport(format: "text" | "csv" | "json", content: string, opts: { headerLines?: string[] } = {}): ParseResult {
+export function parseImport(format: "text" | "csv" | "json", content: string, opts: { headerLines?: string[]; clean?: boolean } = {}): ParseResult {
   if (format === "csv") return parseSharesCsv(content);
-  if (format === "json") return parseHelperJson(content);
+  if (format === "json") return parseHelperJson(content, { clean: opts.clean });
   return parsePastedPosts(content, opts);
 }

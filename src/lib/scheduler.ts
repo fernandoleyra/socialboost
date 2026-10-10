@@ -1,5 +1,6 @@
 import "server-only";
 import { getDb, logActivity } from "./db";
+import { HttpError } from "./http";
 import { getSetting, setSetting } from "./settings";
 import { hasUsableConnection, isPublishingMarker, publishToLinkedIn } from "./linkedin";
 import { MISSED_MESSAGE, VERIFY_MESSAGE } from "./calendar/linkedin-format";
@@ -67,6 +68,7 @@ export async function schedulerTick(now: Date = new Date()): Promise<{ published
   const attempts = getSetting<Record<string, string>>(ATTEMPTS_KEY, {});
   const live = new Set(rows.map((r) => r.id));
   const nextAttempts: Record<string, string> = Object.fromEntries(Object.entries(attempts).filter(([id]) => live.has(id)));
+  const before = JSON.stringify(attempts);
   const result = { published: 0, failed: 0, missed: 0, waiting: 0 };
 
   const due = rows
@@ -104,11 +106,15 @@ export async function schedulerTick(now: Date = new Date()): Promise<{ published
     try {
       await publishToLinkedIn(row.profile_id, row.id, { trigger: "scheduler" });
       result.published++;
-    } catch {
-      // publishToLinkedIn already stored the reason on the post and in the activity log.
+    } catch (err) {
+      // LinkedIn failures are already stored on the post. Checks that refuse before anything is
+      // sent (empty, over 3,000 characters) only throw: keep their reason visible on the Due post.
+      const reason = err instanceof HttpError ? [err.message, err.hint].filter(Boolean).join(" ") : err instanceof Error ? err.message : "Publishing failed.";
+      getDb().prepare(`UPDATE posts SET error = ?, updated_at = datetime('now') WHERE id = ? AND status = 'scheduled' AND error IS NULL`).run(reason, row.id);
       result.failed++;
     }
   }
-  setSetting(ATTEMPTS_KEY, nextAttempts);
+  // Only write when something changed: the tick runs every minute.
+  if (JSON.stringify(nextAttempts) !== before) setSetting(ATTEMPTS_KEY, nextAttempts);
   return result;
 }

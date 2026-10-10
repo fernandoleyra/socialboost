@@ -81,19 +81,20 @@ export const ImportRequestSchema = z
   .refine((r) => r.kind === "own" || !!r.author, { message: "Add the creator's name", path: ["author"] });
 export type ImportRequest = z.infer<typeof ImportRequestSchema>;
 
-const item = z.string().trim().min(1).max(300);
+const item = z.string().trim().min(1).max(300, "keep each line under 300 characters");
+const lines = (max: number) => z.array(item).max(max, `${max} lines at most`);
 export const ProfileUpdateSchema = z.object({
-  manualRules: z.array(item).max(60).optional(),
+  manualRules: z.array(item).max(60, "60 rules at most").optional(),
   guide: z
     .object({
-      summary: z.string().trim().max(1200),
-      tone: z.array(item).max(12),
-      hookPatterns: z.array(item).max(12),
-      structure: z.array(item).max(12),
-      formatting: z.array(item).max(12),
-      vocabulary: z.array(item).max(16),
-      signatureMoves: z.array(item).max(12),
-      neverDoes: z.array(item).max(16),
+      summary: z.string().trim().max(1200, "keep the summary under 1,200 characters"),
+      tone: lines(12),
+      hookPatterns: lines(12),
+      structure: lines(12),
+      formatting: lines(12),
+      vocabulary: lines(16),
+      signatureMoves: lines(12),
+      neverDoes: lines(16),
     })
     .partial()
     .optional(),

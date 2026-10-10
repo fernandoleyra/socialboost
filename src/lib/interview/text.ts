@@ -19,12 +19,20 @@ const norm = (s: string) =>
 /* Answer classification                                               */
 /* ------------------------------------------------------------------ */
 
+/** Polite tails allowed after an English done phrase ("that's it for now, thanks"). */
+const DONE_TAIL = String.raw`(?:[,.!]*\s*(?:for (?:now|today)|thanks?|thank you|really|i think|i guess|from me|here|now))*$`;
+const done = (body: string) => new RegExp(`^${body}${DONE_TAIL}`);
+
+/**
+ * English patterns are anchored to the whole message so answers like "No more than ten
+ * people", "I'm good at sales" or "Not really, it was just me" keep the story going.
+ */
 const DONE_PATTERNS = [
-  /^(no,? )?(i think )?that'?s (it|all|about it|everything|all i (have|got|remember))\b/,
-  /^(i'?m|i am|we'?re) (done|finished|good)\b/,
-  /^(done|finished|nothing (else|more)|no more|nope|not really|all good)\b/,
-  /^(let'?s|can we|i want to|i'?d like to) (finish|wrap( it)? up|stop|end|save)\b/,
-  /^(wrap (it )?up|finish( it)?|save (it|the story))\b/,
+  done(String.raw`(?:no,? )?(?:i think )?that'?s (?:it|all|about it|everything|all i (?:have|got|remember|can think of))`),
+  done(String.raw`(?:i'?m|i am|we'?re) (?:done|finished|all done)`),
+  done(String.raw`(?:done|all done|finished|nothing (?:else|more)(?: to add)?|no more|that'?s enough)`),
+  done(String.raw`(?:let'?s|can we|i want to|i'?d like to) (?:finish|wrap(?: it| this)? up|stop|end|save)(?: (?:it|this|the story|the interview))?`),
+  done(String.raw`(?:wrap(?: it| this)? up|finish(?: it)?|save (?:it|the story))`),
   // es / pt / it / fr / de
   /^(eso es todo|ya est[aá]|nada m[aá]s|he terminado|es todo)\b/,
   /^([ée] isso|s[oó] isso|terminei|nada mais)\b/,
@@ -52,7 +60,7 @@ export function isAcknowledgement(text: string): boolean {
 const SKIP_PATTERNS = [
   /\b(i )?(don'?t|do not|can'?t|cannot) (really )?(remember|recall|know)\b/,
   /\b(not sure|no idea|no clue|i forget|i forgot|dunno|pass|skip( this| it)?|rather not( say)?|prefer not to)\b/,
-  /^(no|nothing|none|n\/a|nah|-|\?)$/,
+  /^(no|nope|nothing|none|n\/a|nah|not really|nothing really|no one|nobody|-|\?)$/,
   /\b(no recuerdo|no s[eé]|n[aã]o lembro|non ricordo|je ne sais pas|wei[ßs] (ich )?nicht)\b/,
 ];
 
@@ -266,9 +274,13 @@ export function takeSentences(text: string, from: number, final: boolean): { sen
 const FILLER =
   /^(great|good|ok(ay)?|got it|understood|i see|interesting( scenario| story)?|nice|wow|cool|perfect|sure|right|absolutely|of course|thanks?( for sharing( that)?)?|thank you( for sharing( that)?)?|that'?s (great|interesting|impressive|amazing|fascinating|powerful|wonderful|fantastic|really interesting|a great (story|example|point|answer)|a powerful (moment|story|example))|love (it|that)|fascinating|amazing|impressive|makes sense|sounds good|great (story|answer|point|example)|let'?s (dive|get started|begin|start)( in)?)[.!]*$/i;
 
-/** Generic praise or filler that adds nothing ("Great!", "That's interesting.", "Got it."). */
+const PRAISE =
+  /^(that'?s|that is|what|this is|sounds like|it sounds like) (a |an |such a |really |so )?(great|good|interesting|powerful|amazing|impressive|fascinating|valuable|important|wonderful|brilliant|incredible|fantastic|remarkable|inspiring)\b|^(great|good|glad|nice|happy) to hear\b/i;
+
+/** Generic praise or filler that adds nothing ("Great!", "That's a great lesson.", "Got it."). */
 export function isFiller(sentence: string): boolean {
-  return wordCount(sentence) <= 6 && FILLER.test(sentence.trim());
+  const t = sentence.trim();
+  return (wordCount(t) <= 6 && FILLER.test(t)) || (wordCount(t) <= 8 && PRAISE.test(t));
 }
 
 function tidySentence(s: string): string {

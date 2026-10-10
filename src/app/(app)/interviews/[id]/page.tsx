@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { InterviewChat } from "@/components/interview/interview-chat";
 import { HttpError } from "@/lib/http";
 import { loadInterviewView } from "@/lib/interview/service";
-import { getActiveProfile, getInterview, requireProfile } from "@/lib/repo";
+import { getActiveProfile, getInterview } from "@/lib/repo";
 
 export const dynamic = "force-dynamic";
 
@@ -19,7 +19,8 @@ export async function generateMetadata({ params }: { params: Params }): Promise<
 
 export default async function InterviewPage({ params }: { params: Params }) {
   const { id } = await params;
-  const profile = requireProfile();
+  const profile = getActiveProfile();
+  if (!profile) redirect("/welcome");
   let view;
   try {
     view = loadInterviewView(profile, id);

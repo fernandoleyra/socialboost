@@ -1,7 +1,7 @@
 import "server-only";
 import { getDb, logActivity } from "@/lib/db";
 import { HttpError } from "@/lib/http";
-import { chatJson, embed } from "@/lib/llm";
+import { LLMError, chatJson, embed } from "@/lib/llm";
 import {
   getProfile,
   getVoiceProfile,
@@ -18,7 +18,7 @@ import {
 import { getRoute, getSetting, setSetting } from "@/lib/settings";
 import { VoiceGuideSchema, type VoiceProfile } from "@/lib/types";
 import { ImportFormatError, parseImport, type ParsedPost } from "./parse";
-import { ANALYSIS_SYSTEM, analysisBudget, buildAnalysisPrompt, buildVoicePromptBlock, reconcileGuide, sanitizeGuide } from "./prompts";
+import { ANALYSIS_SYSTEM, analysisBudget, buildAnalysisPrompt, buildVoicePromptBlock, groundGuide, reconcileGuide, sanitizeGuide } from "./prompts";
 import { selectForAnalysis } from "./rank";
 import { computeVoiceExtras, computeVoiceStats } from "./stylometry";
 import {
@@ -182,16 +182,17 @@ const NOTHING_FOUND_HINT: Record<ImportRequest["format"], string> = {
 
 export async function importVoice(profile: Profile, req: ImportRequest): Promise<ImportResult> {
   const headerLines = req.kind === "own" ? [profile.name, profile.headline] : req.author ? [req.author] : [];
+  const origin: ImportOrigin = req.origin ?? (req.format === "csv" ? "export" : req.format === "json" ? "helper" : "paste");
   let parsed;
   try {
-    parsed = parseImport(req.format, req.content, { headerLines });
+    // The import preview sends Shares.csv posts back as JSON; their text has no LinkedIn UI to strip.
+    parsed = parseImport(req.format, req.content, { headerLines, clean: !(req.format === "json" && origin === "export") });
   } catch (err) {
     if (err instanceof ImportFormatError) throw new HttpError(400, err.message, err.hint);
     throw err;
   }
   if (parsed.posts.length === 0) throw new HttpError(400, "We couldn't find any posts in that.", NOTHING_FOUND_HINT[req.format]);
 
-  const origin: ImportOrigin = req.origin ?? (req.format === "csv" ? "export" : req.format === "json" ? "helper" : "paste");
   const existing = existingByHash(profile.id);
   let updated = 0;
   const fresh: Parameters<typeof insertVoiceSamples>[1] = [];
@@ -278,6 +279,9 @@ export function updateVoiceProfile(profileId: string, patch: ProfileUpdate): Voi
 /* Analysis                                                            */
 /* ------------------------------------------------------------------ */
 
+/** Past this, a failed model call is almost certainly the HTTP client timing out, not Ollama being down. */
+const SLOW_MODEL_MS = 280_000;
+
 /**
  * Measure the posts, index them for retrieval, and have the extractor model write the style
  * guide from the best/most recent posts that fit its context. Manual rules are kept.
@@ -301,18 +305,29 @@ export async function analyzeVoice(profile: Profile, signal?: AbortSignal): Prom
   const route = getRoute("extractor");
   const budget = analysisBudget({ providerKind: route?.provider.kind ?? "ollama", numCtx: route?.numCtx ?? 8192 });
   const posts = selectForAnalysis(own, budget);
-  const raw = await chatJson(VoiceGuideSchema, {
-    task: "extractor",
-    system: ANALYSIS_SYSTEM,
-    messages: [{ role: "user", content: buildAnalysisPrompt({ name: profile.name, posts, stats, extras }) }],
-    temperature: 0.2,
-    maxTokens: 1500,
-    signal,
-  });
-  const guide = reconcileGuide(sanitizeGuide(raw), stats, extras);
+  const started = Date.now();
+  let raw;
+  try {
+    raw = await chatJson(VoiceGuideSchema, {
+      task: "extractor",
+      system: ANALYSIS_SYSTEM,
+      messages: [{ role: "user", content: buildAnalysisPrompt({ name: profile.name, posts, stats, extras }) }],
+      temperature: 0.2,
+      maxTokens: 1200,
+      signal,
+    });
+  } catch (err) {
+    // A slow CPU-only model can outlive the HTTP client's 5-minute wait; "couldn't reach" would mislead.
+    if (err instanceof LLMError && !signal?.aborted && Date.now() - started > SLOW_MODEL_MS) {
+      throw new LLMError("The model took more than 5 minutes to answer, so the request gave up.", "Pick a smaller or faster model for the Extractor task in Settings → Models, then try again.");
+    }
+    throw err;
+  }
+  const guide = reconcileGuide(groundGuide(sanitizeGuide(raw), texts, stats), stats, extras);
 
-  const cur = getVoiceProfile(profile.id);
-  saveVoiceProfile(profile.id, { stats, guide, manualRules: cur.manualRules });
+  // Posts may have been added or removed while the model was thinking; keep the numbers current.
+  saveVoiceProfile(profile.id, { ...getVoiceProfile(profile.id), guide });
+  refreshStats(profile.id);
   setSetting(metaKey(profile.id), { analyzedAt: new Date().toISOString(), guideSampleCount: own.length, postsRead: posts.length } satisfies VoiceMeta);
   logActivity("voice", `Learned your voice from ${own.length} posts`, { profileId: profile.id });
   return getVoiceState(profile.id);

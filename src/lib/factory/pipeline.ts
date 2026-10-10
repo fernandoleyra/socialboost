@@ -1,16 +1,17 @@
 import "server-only";
+import { z } from "zod";
 import { logActivity } from "@/lib/db";
 import { HttpError } from "@/lib/http";
 import { LLMError, chat, chatJson, chatStream } from "@/lib/llm";
 import { getMemory, getPost, updatePost } from "@/lib/repo";
-import { CritiqueSchema, type Critique, type Post } from "@/lib/types";
+import type { Critique, Post } from "@/lib/types";
 import { AnglesResponseSchema, HooksResponseSchema, cleanHook, normalizeAngles, parseAngleField, serializeAngleField, toAngle, type Angle, type AngleField, type HookOption } from "./angles";
 import { cleanPost } from "./clean";
 import { loadContext, type FactoryContext } from "./context";
 import { lintPost, type LintResult } from "./lint";
 import { applyHumanEdit, postLabel } from "./posts";
 import { anglesPrompt, critiquePrompt, draftPrompt, hooksPrompt, instructionsFromCritique, instructionsFromLint, revisePrompt, type Prompt } from "./prompts";
-import { buildQuality, isCritiqueFresh, qualityGate, relint } from "./quality";
+import { buildQuality, dropUnfoundedInventions, isCritiqueFresh, qualityGate, relint } from "./quality";
 import { REWRITABLE, statusAfterGeneration } from "./status";
 import { getStructure, recommendStructures, type StructureId } from "./structures";
 import { saveGeneratedVersion, snapshotBeforeGeneration } from "./versions";
@@ -25,8 +26,28 @@ import { saveGeneratedVersion, snapshotBeforeGeneration } from "./versions";
 
 const WRITER_MAX_TOKENS = 1600;
 
+/**
+ * Non-streamed calls only get response headers once the model has finished. Node's fetch gives up
+ * after ~300 s without headers and reports "fetch failed", which reads like "Ollama is down".
+ * Translate that case into what actually happened.
+ */
+async function slowSafe<T>(fn: () => Promise<T>): Promise<T> {
+  const started = Date.now();
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof LLMError && /fetch failed/i.test(err.message) && Date.now() - started > 240_000) {
+      throw new LLMError(
+        "The model took more than 4 minutes to answer and the connection timed out.",
+        "Your machine may be busy with other model requests. Try again in a moment, or pick a smaller, faster model for this task in Settings → Models.",
+      );
+    }
+    throw err;
+  }
+}
+
 function messages(p: Prompt) {
-  return { system: p.system, messages: [{ role: "user" as const, content: p.user }] };
+  return { system: p.system, messages: p.messages };
 }
 
 function requireStory(post: Post) {
@@ -39,7 +60,7 @@ function requireRewritable(post: Post) {
 
 function lintFor(ctx: FactoryContext, body: string, extraFacts?: string): LintResult {
   const facts = ctx.memoryFull ? ctx.facts : extraFacts ? `${ctx.facts}\n${extraFacts}` : undefined;
-  return lintPost(body, ctx.stats, { facts, neverSay: ctx.neverSay });
+  return lintPost(body, ctx.stats, { facts, notes: ctx.memoryFull?.story || undefined, neverSay: ctx.neverSay });
 }
 
 function setAngleField(post: Post, field: AngleField, extra: Partial<Post> = {}): Post {
@@ -67,7 +88,7 @@ export async function generateAngles(post: Post, signal?: AbortSignal): Promise<
   requireRewritable(post);
   const ctx = await loadContext(post);
   const recommended = recommendStructures(ctx.memoryFull!, { hasPhoto: !!post.photoId });
-  const res = await chatJson(AnglesResponseSchema, { task: "writer", ...messages(anglesPrompt(ctx, recommended)), temperature: 0.7, maxTokens: 1400, signal });
+  const res = await slowSafe(() => chatJson(AnglesResponseSchema, { task: "writer", ...messages(anglesPrompt(ctx, recommended)), temperature: 0.7, maxTokens: 1400, signal }));
   const angles = normalizeAngles(res.angles, recommended[0]);
   if (!angles.length) throw new LLMError("The model didn't return usable angles.", "Try again, or choose a larger writer model in Settings → Models.");
   const field = parseAngleField(post.angle);
@@ -119,9 +140,22 @@ export async function draftStream(post: Post, input: { angle?: Angle | null; ang
 /* Critique                                                            */
 /* ------------------------------------------------------------------ */
 
-function tidyCritique(c: Critique): Critique {
+/**
+ * What the critic fills in. Scores are plain numbers here and clamped to 1-10 afterwards, so a
+ * small model answering 0 or 11 doesn't fail the whole critique on validation.
+ */
+const CritiqueReply = z.object({
+  humanness: z.number(),
+  specificity: z.number(),
+  voiceMatch: z.number(),
+  hook: z.number(),
+  issues: z.array(z.string()).default([]),
+  suggestions: z.array(z.string()).default([]),
+});
+
+function tidyCritique(c: z.infer<typeof CritiqueReply>, facts: string | null): Critique {
   const clamp = (n: number) => Math.max(1, Math.min(10, Math.round(n)));
-  return {
+  const tidy: Critique = {
     humanness: clamp(c.humanness),
     specificity: clamp(c.specificity),
     voiceMatch: clamp(c.voiceMatch),
@@ -129,13 +163,14 @@ function tidyCritique(c: Critique): Critique {
     issues: c.issues.map((s) => s.trim()).filter(Boolean).slice(0, 6),
     suggestions: c.suggestions.map((s) => s.trim()).filter(Boolean).slice(0, 5),
   };
+  return facts ? dropUnfoundedInventions(tidy, facts) : tidy;
 }
 
 /** The judge itself: lint, then the critic model, then save the combined quality. */
 async function critiqueWith(ctx: FactoryContext, post: Post, text: string, signal?: AbortSignal): Promise<{ post: Post; critique: Critique }> {
   const lint = lintFor(ctx, text);
-  const raw = await chatJson(CritiqueSchema, { task: "critic", ...messages(critiquePrompt(ctx, text, lint.issues)), temperature: 0.2, maxTokens: 900, signal });
-  const critique = tidyCritique(raw);
+  const raw = await slowSafe(() => chatJson(CritiqueReply, { task: "critic", ...messages(critiquePrompt(ctx, text, lint.issues)), temperature: 0.2, maxTokens: 900, signal }));
+  const critique = tidyCritique(raw, ctx.memoryFull ? ctx.facts : null);
   const quality = buildQuality({ body: text, lint: lint.issues, lintScore: lint.score, critique, critiqueBody: text });
   return { post: updatePost(post.id, { quality }), critique };
 }
@@ -147,7 +182,9 @@ async function critiqueWith(ctx: FactoryContext, post: Post, text: string, signa
 export async function runCritique(post: Post, body?: string, signal?: AbortSignal): Promise<{ post: Post; critique: Critique }> {
   const text = body ?? post.body;
   if (!text.trim()) throw new HttpError(400, "There's nothing to critique yet.", "Draft the post first.");
-  const current = body !== undefined && body !== post.body ? applyHumanEdit(post, body) : post;
+  const edited = body !== undefined && body !== post.body ? body : null;
+  if (edited !== null && post.status === "published") throw new HttpError(409, "This post is already published.", "Edit it on LinkedIn; changes here wouldn't reach your feed.");
+  const current = edited !== null ? applyHumanEdit(post, edited) : post;
   const ctx = await loadContext(current);
   return critiqueWith(ctx, current, text, signal);
 }
@@ -205,7 +242,7 @@ export async function suggestHooks(post: Post, body?: string | null, signal?: Ab
   const text = body ?? post.body;
   if (!text.trim()) throw new HttpError(400, "Draft the post first, then try other hooks.");
   const ctx = await loadContext(post);
-  const res = await chatJson(HooksResponseSchema, { task: "writer", ...messages(hooksPrompt(ctx, text)), temperature: 0.85, maxTokens: 900, signal });
+  const res = await slowSafe(() => chatJson(HooksResponseSchema, { task: "writer", ...messages(hooksPrompt(ctx, text)), temperature: 0.85, maxTokens: 900, signal }));
   const seen = new Set<string>();
   const out: HookOption[] = [];
   for (const h of res.hooks) {
@@ -252,7 +289,7 @@ export async function autopilot(post: Post, opts: { force?: boolean; signal?: Ab
   snapshotBeforeGeneration(current.id, current.body);
 
   const ctx = await loadContext(current);
-  const draft = await chat({ task: "writer", ...messages(draftPrompt(ctx, angle, structure.id)), maxTokens: WRITER_MAX_TOKENS, signal: opts.signal });
+  const draft = await slowSafe(() => chat({ task: "writer", ...messages(draftPrompt(ctx, angle, structure.id)), maxTokens: WRITER_MAX_TOKENS, signal: opts.signal }));
   current = finalizeGeneration(current.id, ctx, draft, "ai", `Draft · ${structure.name} (autopilot)`);
   steps.push("draft");
 
@@ -262,7 +299,7 @@ export async function autopilot(post: Post, opts: { force?: boolean; signal?: Ab
   if (!qualityGate(current.quality, current.body).ready) {
     const changes = [...instructionsFromLint(current.quality?.lint ?? []), ...(current.quality?.critique ? instructionsFromCritique(current.quality.critique) : [])];
     if (changes.length) {
-      const revised = await chat({ task: "writer", ...messages(revisePrompt(ctx, current.body, changes)), maxTokens: WRITER_MAX_TOKENS, signal: opts.signal });
+      const revised = await slowSafe(() => chat({ task: "writer", ...messages(revisePrompt(ctx, current.body, changes)), maxTokens: WRITER_MAX_TOKENS, signal: opts.signal }));
       current = finalizeGeneration(current.id, ctx, revised, "revision", "Autopilot fixes");
       steps.push("revise");
       current = (await critiqueWith(ctx, current, current.body, opts.signal)).post;

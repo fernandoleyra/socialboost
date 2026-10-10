@@ -7,7 +7,7 @@ import { HttpError } from "./http";
 import { getSetting, setSetting } from "./settings";
 import { getMemory, getPhoto, getPost, updateMemory, updatePost } from "./repo";
 import type { Post } from "./types";
-import type { LinkedInAccountView } from "./calendar/types";
+import type { LinkedInAccountView, LinkedInSettings } from "./calendar/types";
 import {
   LINKEDIN_API,
   LINKEDIN_API_VERSION_DEFAULT,
@@ -95,12 +95,29 @@ export function saveLinkedInConfig(patch: { clientId?: string; clientSecret?: st
   if (next.redirectUri) {
     try {
       const u = new URL(next.redirectUri);
-      if (u.hash) throw new Error("hash");
+      if (u.hash || (u.protocol !== "http:" && u.protocol !== "https:")) throw new Error("not a web URL");
     } catch {
       throw new HttpError(400, "The redirect URL must be a full URL without a #, like http://localhost:3000/api/linkedin/callback.");
     }
   }
   setSetting(CONFIG_KEY, next);
+}
+
+/** Everything Settings → LinkedIn shows (never the secret or the token). */
+export function linkedInSettingsFor(profileId: string, origin: string): LinkedInSettings {
+  const cfg = getLinkedInConfig(origin);
+  return {
+    config: {
+      clientId: cfg.clientId,
+      hasSecret: !!cfg.clientSecret,
+      redirectUri: cfg.redirectUri,
+      apiVersion: cfg.apiVersion,
+      env: cfg.env,
+      ready: !!cfg.clientId && !!cfg.clientSecret,
+    },
+    defaultRedirectUri: defaultRedirectUri(origin),
+    account: getLinkedInAccount(profileId),
+  };
 }
 
 /* ================================================================== */
@@ -408,10 +425,10 @@ export async function publishToLinkedIn(profileId: string, postId: string, opts:
     }
   } catch {
     // The request may have reached LinkedIn. Never retry blindly: ask the person to check.
-    updatePost(post.id, { error: VERIFY_MESSAGE });
-    logActivity("publish", `Unconfirmed LinkedIn publish: ${hookOf(text)}`, { profileId, refId: post.id });
-    throw new HttpError(504, "LinkedIn didn't answer in time.", "Check your feed before trying again, so the post doesn't go out twice.");
+    return unconfirmed(post, profileId, text, "LinkedIn didn't answer in time.");
   }
+  // A 5xx on create is ambiguous too: a gateway can fail after the post was created (research 05 §8).
+  if (res.status >= 500) return unconfirmed(post, profileId, text, `LinkedIn had a problem on their side (${res.status}) and didn't confirm the post.`);
   if (res.status !== 201 && res.status !== 200) return fail(post, await apiError(res, version), profileId);
 
   const urn = res.headers.get("x-restli-id") ?? res.headers.get("x-linkedin-id");
@@ -425,6 +442,13 @@ export async function publishToLinkedIn(profileId: string, postId: string, opts:
   markMemoryUsed(published);
   logActivity("publish", `${opts.trigger === "scheduler" ? "Published on schedule" : "Published"} on LinkedIn: ${hookOf(text)}`, { profileId, refId: post.id });
   return published;
+}
+
+/** The outcome of the create call is unknown: park the post until a person checks the feed. */
+function unconfirmed(post: Post, profileId: string, text: string, message: string): never {
+  updatePost(post.id, { error: VERIFY_MESSAGE });
+  logActivity("publish", `Unconfirmed LinkedIn publish: ${hookOf(text)}`, { profileId, refId: post.id });
+  throw new HttpError(504, message, "Check your feed before trying again, so the post doesn't go out twice.");
 }
 
 function fail(post: Post, err: unknown, profileId: string): never {

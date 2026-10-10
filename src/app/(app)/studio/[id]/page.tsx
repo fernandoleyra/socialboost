@@ -17,11 +17,12 @@ export default async function PostEditorPage({ params, searchParams }: { params:
 
   const detail = postDetail(post);
   const strategy = getStrategy(profile.id);
-  const { facts, neverSay, stats } = lintInputs(post);
-  const taken = listPosts(profile.id, { status: ["scheduled", "published"] })
-    .filter((p) => p.id !== post.id)
-    .map((p) => p.scheduledAt ?? p.publishedAt)
-    .filter((t): t is string => !!t);
+  const { facts, notes, neverSay, stats } = lintInputs(post);
+  // Days the Calendar already uses: any dated post, planned ideas included (one post per day).
+  const taken = listPosts(profile.id)
+    .filter((p) => p.id !== post.id && p.status !== "archived")
+    .map((p) => ({ id: p.id, at: p.status === "published" ? (p.publishedAt ?? p.scheduledAt) : p.scheduledAt }))
+    .filter((t): t is { id: string; at: string } => !!t.at);
 
   return (
     <PostEditor
@@ -33,7 +34,9 @@ export default async function PostEditorPage({ params, searchParams }: { params:
       voiceSamples={listVoiceSamples(profile.id, "own").length}
       neverSay={neverSay}
       facts={facts ?? null}
-      cadence={strategy ? { days: strategy.cadence.days, time: strategy.cadence.time } : null}
+      notes={notes ?? null}
+      cadence={strategy ? strategy.cadence : null}
+      timezone={profile.timezone}
       taken={taken}
       hasCta={!!strategy?.cta.trim()}
       autoAngles={sp.angles === "1"}

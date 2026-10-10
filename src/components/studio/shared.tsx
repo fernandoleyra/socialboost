@@ -1,7 +1,9 @@
 "use client";
 
+import { useSyncExternalStore } from "react";
 import { Camera } from "lucide-react";
 import { Chip, TONES, cx } from "@/components/ui";
+import { parseDbDate } from "@/lib/calendar/time";
 import { scoreTone } from "@/lib/factory/quality";
 import { STATUS_META } from "@/lib/factory/status";
 import type { PostStatus } from "@/lib/types";
@@ -71,10 +73,24 @@ export function ScoreRing({ score, size = 40, stroke, label, className }: { scor
   );
 }
 
+const noop = () => () => {};
+
+/**
+ * False during server rendering and hydration, true after. Dates are formatted in the viewer's
+ * locale and time zone, which the server doesn't know: render them only once this is true, or
+ * the server's text (often UTC) would stick and React would report a hydration mismatch.
+ */
+export function useHydrated(): boolean {
+  return useSyncExternalStore(
+    noop,
+    () => true,
+    () => false,
+  );
+}
+
 export function formatWhen(iso: string | null | undefined, opts: { withTime?: boolean } = {}): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
+  const d = parseDbDate(iso);
+  if (!d) return "";
   return d.toLocaleString(undefined, {
     weekday: "short",
     month: "short",
@@ -83,8 +99,20 @@ export function formatWhen(iso: string | null | undefined, opts: { withTime?: bo
   });
 }
 
+/** A date in the viewer's locale and time zone, rendered after hydration. */
+export function When({ iso, withTime, relative }: { iso: string | null | undefined; withTime?: boolean; relative?: boolean }) {
+  const hydrated = useHydrated();
+  const d = parseDbDate(iso);
+  if (!d) return null;
+  return (
+    <time dateTime={d.toISOString()}>
+      {hydrated ? (relative ? relativeTime(d.toISOString()) : formatWhen(d.toISOString(), { withTime })) : ""}
+    </time>
+  );
+}
+
 export function relativeTime(iso: string): string {
-  const t = Date.parse(iso.includes("T") ? iso : iso.replace(" ", "T") + "Z");
+  const t = parseDbDate(iso)?.getTime() ?? NaN;
   if (Number.isNaN(t)) return "";
   const s = Math.round((Date.now() - t) / 1000);
   if (s < 45) return "just now";

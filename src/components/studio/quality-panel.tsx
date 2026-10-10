@@ -32,7 +32,7 @@ export function IssueList({ issues, onFocus, limit = 8 }: { issues: LintHit[]; o
           disabled={i.start === undefined}
           className="flex w-full items-start gap-2.5 rounded-[12px] px-2.5 py-2 text-left transition-colors hover:bg-fill-4 disabled:hover:bg-transparent disabled:cursor-default focus-ring"
         >
-          <span className="mt-1.5 size-2 shrink-0 rounded-full" style={{ background: SEV[i.severity].color }} aria-label={SEV[i.severity].label} />
+          <span className="mt-1.5 size-2 shrink-0 rounded-full" style={{ background: SEV[i.severity].color }} role="img" aria-label={SEV[i.severity].label} />
           <span className="min-w-0 t-footnote">
             <span className="font-semibold">{RULE_LABELS[i.rule] ?? i.rule}</span>
             <span className="text-label-2"> · {i.message}</span>
@@ -50,6 +50,7 @@ export function IssueList({ issues, onFocus, limit = 8 }: { issues: LintHit[]; o
 
 export function QualityPanel({
   hasBody,
+  memoryId,
   lint,
   lintScore,
   score,
@@ -66,6 +67,8 @@ export function QualityPanel({
   onFocus,
 }: {
   hasBody: boolean;
+  /** The memory behind the post (enables the "thin story" nudge and links to it). */
+  memoryId: string | null;
   lint: LintHit[];
   lintScore: number;
   score: number;
@@ -175,8 +178,8 @@ export function QualityPanel({
             ))}
             {critique.issues.length > 0 && (
               <ul className="space-y-1.5 pt-1">
-                {critique.issues.map((s) => (
-                  <li key={s} className="flex gap-2 t-footnote">
+                {critique.issues.map((s, i) => (
+                  <li key={i} className="flex gap-2 t-footnote">
                     <span className="mt-[7px] size-1.5 shrink-0 rounded-full" style={{ background: /^invented/i.test(s) ? "var(--sys-red)" : "var(--sys-orange)" }} />
                     <span className={cx(/^invented/i.test(s) && "font-semibold")}>{s}</span>
                   </li>
@@ -185,8 +188,8 @@ export function QualityPanel({
             )}
             {critique.suggestions.length > 0 && (
               <ul className="space-y-1.5">
-                {critique.suggestions.map((s) => (
-                  <li key={s} className="flex gap-2 t-footnote text-label-2">
+                {critique.suggestions.map((s, i) => (
+                  <li key={i} className="flex gap-2 t-footnote text-label-2">
                     <Sparkles className="mt-0.5 size-3.5 shrink-0 text-accent" />
                     {s}
                   </li>
@@ -201,6 +204,22 @@ export function QualityPanel({
           </div>
         )}
       </div>
+
+      {memoryId && critique && critiqueFresh && critique.specificity <= 4 && (
+        <div className="space-y-2 rounded-[14px] p-3.5" style={{ background: "color-mix(in srgb, var(--sys-orange) 10%, transparent)" }}>
+          <p className="t-footnote">
+            <span className="font-semibold">The story itself may be thin.</span> Rewrites can't add what isn't there. Add the numbers, names and exact words to the memory, or dig deeper in a short follow-up interview.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Link href={`/memories?open=${encodeURIComponent(memoryId)}`} className="btn btn-glass btn-sm">
+              Edit the memory
+            </Link>
+            <Link href="/interviews/new" className="btn btn-plain btn-sm">
+              Follow-up interview
+            </Link>
+          </div>
+        </div>
+      )}
 
       {/* Lint */}
       <div className="space-y-2">

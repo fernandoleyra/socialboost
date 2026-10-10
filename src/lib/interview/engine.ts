@@ -135,6 +135,16 @@ export function strengthFromCoverage(items: CoverageItem[]): number {
 
 export type ReplyIntent = "photo-later" | undefined;
 
+/**
+ * After a wrap or closing line: does this reply mean "nothing more" rather than a new story?
+ * Covers "that's it", "ok thanks", "no", "nope, all good", "I don't know" and a bare photo.
+ */
+export function isFinishingReply(text: string): boolean {
+  if (isDoneSignal(text) || isAcknowledgement(text) || isSkipAnswer(text)) return true;
+  const t = text.trim().toLowerCase().replace(/[.!]+$/, "");
+  return /^(?:(?:no|nope|nah)(?:[,.!]*\s*(?:thanks?|thank you|all good|that'?s (?:it|all)|i'?m (?:good|done|fine)|not (?:now|today)))*|not (?:really|now|today)|maybe later)$/.test(t);
+}
+
 function lastAssistantBefore(messages: TranscriptMessage[], index: number): TranscriptMessage | undefined {
   for (let i = index - 1; i >= 0; i--) if (messages[i].role === "assistant") return messages[i];
   return undefined;
@@ -160,8 +170,7 @@ export function applyUserTurn(kind: ActiveInterviewKind, messages: TranscriptMes
     const pending = [...messages].reverse().find((m) => m.role === "assistant" && state.meta[m.id]?.stage === "photo");
     if (pending && !next.photoLater.includes(pending.id)) next.photoLater.push(pending.id);
   }
-  const finishing = isDoneSignal(user.content) || isAcknowledgement(user.content);
-  if ((prevStage === "wrap" || prevStage === "closing") && !finishing && intent !== "photo-later" && !next.threadStarts.includes(user.id)) {
+  if ((prevStage === "wrap" || prevStage === "closing") && !isFinishingReply(user.content) && intent !== "photo-later" && !next.threadStarts.includes(user.id)) {
     next.threadStarts.push(user.id);
   }
   return next;
@@ -236,7 +245,7 @@ function decideStory(
       return wrap();
     case "wrap":
     case "closing":
-      if (isDoneSignal(lastUser.content) || isAcknowledgement(lastUser.content)) return { ...base, stage: "closing" };
+      if (isFinishingReply(lastUser.content)) return { ...base, stage: "closing" };
       break; // a new thread was opened by applyUserTurn → keep mining
   }
 
@@ -282,7 +291,7 @@ function decidePositioning(
   if (!messages.some((m) => m.role === "user") || !lastUser) return { ...base, stage: "opening", target: first.key, probe: first.question };
 
   if (ctx.prevStage === "pos-wrap" || ctx.prevStage === "pos-followup" || ctx.prevStage === "closing") {
-    return isDoneSignal(lastUser.content) || isAcknowledgement(lastUser.content) ? { ...base, stage: "closing" } : { ...base, stage: "pos-followup" };
+    return isFinishingReply(lastUser.content) ? { ...base, stage: "closing" } : { ...base, stage: "pos-followup" };
   }
   if (isDoneSignal(lastUser.content)) return { ...base, stage: "pos-wrap" };
 
@@ -322,11 +331,6 @@ export function storyExtractionTranscript(thread: TranscriptMessage[], meta: Rec
     out.push(m);
   }
   return { messages: out, privacy };
-}
-
-/** Stages whose reply must be exactly one question (the stream filter cuts after it). */
-export function isSingleQuestionStage(stage: Stage): boolean {
-  return stage === "probe" || stage === "photo" || stage === "photo-caption" || stage === "pos-question" || stage === "pos-example";
 }
 
 /* ------------------------------------------------------------------ */

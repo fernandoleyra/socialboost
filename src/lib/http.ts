@@ -45,24 +45,46 @@ export function handle<A extends unknown[]>(fn: (...args: A) => Promise<Response
  */
 export function streamText(gen: AsyncGenerator<string>, onDone?: (full: string) => void | Promise<void>) {
   const encoder = new TextEncoder();
+  let closed = false;
   const body = new ReadableStream<Uint8Array>({
     async start(controller) {
+      const push = (text: string) => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(text));
+        } catch {
+          closed = true;
+        }
+      };
       let full = "";
       try {
         for await (const piece of gen) {
+          if (closed) break;
           full += piece;
-          controller.enqueue(encoder.encode(piece));
+          push(piece);
         }
-        await onDone?.(full);
+        // A disconnected client means the result is incomplete — don't persist it.
+        if (!closed) await onDone?.(full);
       } catch (err) {
         const payload =
           err instanceof LLMError
             ? { error: err.message, hint: err.hint }
             : { error: err instanceof Error ? err.message : "Generation failed" };
-        controller.enqueue(encoder.encode("\u0000" + JSON.stringify(payload)));
+        push("\u0000" + JSON.stringify(payload));
       } finally {
-        controller.close();
+        if (!closed) {
+          closed = true;
+          try {
+            controller.close();
+          } catch {
+            /* already closed */
+          }
+        }
       }
+    },
+    cancel() {
+      closed = true;
+      void gen.return(undefined);
     },
   });
   return new Response(body, {

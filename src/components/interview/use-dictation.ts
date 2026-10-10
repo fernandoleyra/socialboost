@@ -73,12 +73,20 @@ export function useDictation({ lang, onText, onInterim }: { lang: string; onText
     timer.current = null;
   };
 
+  /** On unmount: release the mic without transcribing a half-finished answer nobody will see. */
   const cleanup = useCallback(() => {
     stopTimer();
-    recognition.current?.abort();
+    if (recognition.current) {
+      recognition.current.onend = null;
+      recognition.current.abort();
+    }
     recognition.current = null;
-    if (recorder.current && recorder.current.state !== "inactive") recorder.current.stop();
-    recorder.current?.stream.getTracks().forEach((t) => t.stop());
+    const rec = recorder.current;
+    if (rec) {
+      rec.onstop = null;
+      if (rec.state !== "inactive") rec.stop();
+      rec.stream.getTracks().forEach((t) => t.stop());
+    }
     recorder.current = null;
   }, []);
 

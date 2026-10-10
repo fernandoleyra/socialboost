@@ -1,58 +1,39 @@
 /**
- * Suggested publishing slots for the editor's Schedule sheet. Pure.
+ * Suggested publishing slots for the editor's Schedule sheet. Pure — runs in the browser.
  *
- * Works in the browser's local time (the date-time picker is local too). Follows the strategy
- * cadence (weekdays + time) and skips days that already have a post, keeping ≥ 12 h between
- * posts (research 02 §1.3: < 12 h after the previous post costs reach; 12-24 h is neutral).
+ * Uses the Calendar's own slot rules (src/lib/calendar/slots.ts) so the Studio never suggests a
+ * time the Calendar wouldn't: the strategy cadence in the *profile's* time zone, posting days
+ * thinned to posts-per-week, and one post per local day — a day is taken by any dated post,
+ * including ideas the auto-planner already put there (research 02 §1.3: posts ≥ a day apart).
  */
 
-export type Cadence = { days: number[]; time: string };
+import { cadenceSlots, markTaken, type Cadence } from "@/lib/calendar/slots";
 
-export const DEFAULT_CADENCE: Cadence = { days: [2, 3, 4], time: "08:30" };
+export type { Cadence };
 
-function parseTime(time: string): [number, number] {
-  const m = /^(\d{1,2}):(\d{2})/.exec(time.trim());
-  if (!m) return [8, 30];
-  return [Math.min(23, Number(m[1])), Math.min(59, Number(m[2]))];
+/** A post that occupies a day on the calendar. */
+export type TakenSlot = { id: string; at: string | null };
+
+/** Slots closer than this to "now" aren't worth suggesting. */
+const LEAD_MS = 30 * 60_000;
+
+/** The next `count` open cadence slots after `now`, as UTC instants. */
+export function nextOpenSlots(input: { cadence: Cadence | null | undefined; timezone: string; taken: TakenSlot[]; now: Date; count?: number; horizonDays?: number }): Date[] {
+  const from = new Date(input.now.getTime() + LEAD_MS);
+  const to = new Date(input.now.getTime() + (input.horizonDays ?? 42) * 86_400_000);
+  return markTaken(cadenceSlots({ cadence: input.cadence, timezone: input.timezone, from, to }), input.taken, input.timezone)
+    .filter((s) => !s.taken)
+    .slice(0, input.count ?? 4)
+    .map((s) => new Date(s.at));
 }
 
-const MIN_GAP_MS = 12 * 3600_000;
-
-const dayKey = (d: Date) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
-
-/**
- * The next `count` open cadence slots after `now`, as local Date objects.
- * `taken` are ISO timestamps of posts already scheduled or published.
- */
-export function nextOpenSlots(cadence: Cadence | null | undefined, taken: string[], now: Date, count = 3, horizonDays = 42): Date[] {
-  const c = cadence && cadence.days.length ? cadence : DEFAULT_CADENCE;
-  const [hh, mm] = parseTime(c.time);
-  const takenDays = new Set(
-    taken
-      .map((t) => new Date(t))
-      .filter((d) => !Number.isNaN(d.getTime()))
-      .map(dayKey),
-  );
-  const takenTimes = taken.map((t) => new Date(t).getTime()).filter((t) => !Number.isNaN(t));
-  const out: Date[] = [];
-  for (let i = 0; i <= horizonDays && out.length < count; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i, hh, mm, 0, 0);
-    if (!c.days.includes(d.getDay())) continue;
-    if (d.getTime() <= now.getTime() + 30 * 60_000) continue;
-    if (takenDays.has(dayKey(d))) continue;
-    if (takenTimes.some((t) => Math.abs(t - d.getTime()) < MIN_GAP_MS)) continue;
-    out.push(d);
-  }
-  return out;
-}
-
-/** Value for <input type="datetime-local"> from a Date, in local time. */
+/** Value for <input type="datetime-local"> from a Date, in the browser's local time. */
 export function toLocalInput(d: Date): string {
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-/** Parse a datetime-local value (local time) into an ISO string, or null. */
+/** Parse a datetime-local value (browser local time) into an ISO string, or null. */
 export function fromLocalInput(v: string): string | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(v);
   if (!m) return null;

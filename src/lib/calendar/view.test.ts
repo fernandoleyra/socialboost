@@ -26,7 +26,9 @@ describe("displayState", () => {
     expect(visibleError({ ...base, error: MISSED_MESSAGE }, now)).toBeNull();
     expect(visibleError({ ...base, scheduledAt: "2026-10-09T09:00:00Z", error: MISSED_MESSAGE }, now)).toBe(MISSED_MESSAGE);
     expect(visibleError({ ...base, error: publishingMarker(now) }, now)).toBeNull();
-    expect(visibleError({ ...base, error: "LinkedIn returned 400" }, now)).toBe("LinkedIn returned 400");
+    expect(visibleError({ ...base, error: "LinkedIn returned 400" }, now)).toBeNull();
+    expect(visibleError({ ...base, status: "approved", error: "LinkedIn returned 400" }, now)).toBe("LinkedIn returned 400");
+    expect(visibleError({ ...base, scheduledAt: "2026-10-10T09:00:00Z", error: "LinkedIn returned 400" }, now)).toBe("LinkedIn returned 400");
   });
 });
 
@@ -49,6 +51,8 @@ describe("grids", () => {
 
   it("labels weekdays starting Monday", () => {
     expect(weekdayLabels("en-US")).toEqual(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]);
-    expect(formatWeekTitle("2026-10-10", "en-US")).toBe("October 5 – 11, 2026");
+    expect(formatWeekTitle("2026-10-10", "en-GB")).toBe("5–11 October 2026");
+    expect(formatWeekTitle("2026-10-01", "en-GB")).toMatch(/^28 Sep.* – 4 Oct 2026$/);
+    expect(formatWeekTitle("2026-01-01", "en-GB")).toBe("29 Dec 2025 – 4 Jan 2026");
   });
 });

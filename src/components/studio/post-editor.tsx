@@ -28,10 +28,11 @@ import {
 import { Button, Chip, IconButton, Input, Sheet, Typing, api, cx, streamText, toast } from "@/components/ui";
 import { hookOf, parseAngleField, replaceHook, type Angle, type HookOption } from "@/lib/factory/angles";
 import { cleanPost, toClipboard } from "@/lib/factory/clean";
+import { publishingSince } from "@/lib/calendar/linkedin-format";
 import { LINKEDIN_MAX_CHARS, autofix, lintPost, type LintHit } from "@/lib/factory/lint";
 import { REVISE_PRESETS, type RevisePresetId } from "@/lib/factory/prompts";
 import { combineScore, isCritiqueFresh, qualityGate } from "@/lib/factory/quality";
-import type { Cadence } from "@/lib/factory/schedule";
+import type { Cadence, TakenSlot } from "@/lib/factory/schedule";
 import { STATUS_META } from "@/lib/factory/status";
 import { recommendStructures } from "@/lib/factory/structures";
 import type { PostDetail } from "@/lib/factory/types";
@@ -43,7 +44,7 @@ import { LinkedInPreview } from "./linkedin-preview";
 import { PhotoSheet, photoProblem } from "./photo-sheet";
 import { QualityPanel } from "./quality-panel";
 import { ScheduleSheet } from "./schedule-sheet";
-import { PillarChip, StatusChip, formatWhen, photoSrc, type PillarLite } from "./shared";
+import { PillarChip, StatusChip, When, formatWhen, photoSrc, useHydrated, type PillarLite } from "./shared";
 import { StoryPanel } from "./story-panel";
 import { VersionsSheet } from "./versions-sheet";
 
@@ -56,9 +57,13 @@ export type EditorProps = {
   neverSay: string[];
   /** Everything the post may state as fact (null when no memory is linked: no fact check). */
   facts: string | null;
+  /** The memory's story text, for the "copied from your notes" check. */
+  notes: string | null;
   cadence: Cadence | null;
-  /** Times of other scheduled/published posts, to suggest open slots. */
-  taken: string[];
+  /** The profile's time zone (the cadence is in it). */
+  timezone: string;
+  /** Other dated posts (planned, scheduled, published): their days aren't suggested again. */
+  taken: TakenSlot[];
   hasCta: boolean;
   autoAngles: boolean;
 };
@@ -100,15 +105,37 @@ function SaveIndicator({ state }: { state: SaveState }) {
 
 function Menu({ items }: { items: { label: string; icon: typeof Clipboard; onClick: () => void; destructive?: boolean; hidden?: boolean }[] }) {
   const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  const list = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    list.current?.querySelector<HTMLElement>("[role=menuitem]")?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        setOpen(false);
+        root.current?.querySelector<HTMLElement>("button")?.focus();
+        return;
+      }
+      if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+      const els = [...(list.current?.querySelectorAll<HTMLElement>("[role=menuitem]") ?? [])];
+      if (!els.length) return;
+      e.preventDefault();
+      const i = els.indexOf(document.activeElement as HTMLElement);
+      els[(i + (e.key === "ArrowDown" ? 1 : -1) + els.length) % els.length].focus();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
   return (
-    <div className="relative">
-      <IconButton label="More actions" onClick={() => setOpen((o) => !o)} className="btn-glass !size-9" aria-expanded={open}>
+    <div ref={root} className="relative">
+      <IconButton label="More actions" onClick={() => setOpen((o) => !o)} className="btn-glass !size-9" aria-expanded={open} aria-haspopup="menu">
         <MoreHorizontal className="size-4.5" />
       </IconButton>
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="glass-strong absolute right-0 top-full z-50 mt-2 w-60 rounded-[18px] p-1.5 animate-pop" role="menu">
+          <div ref={list} className="glass-strong absolute right-0 top-full z-50 mt-2 w-60 rounded-[18px] p-1.5 animate-pop" role="menu">
             {items
               .filter((i) => !i.hidden)
               .map(({ label, icon: Icon, onClick, destructive }) => (
@@ -135,6 +162,7 @@ function Menu({ items }: { items: { label: string; icon: typeof Clipboard; onCli
 
 export function PostEditor(props: EditorProps) {
   const router = useRouter();
+  const hydrated = useHydrated();
   const [detail, setDetail] = useState(props.initial);
   const post = detail.post;
   const id = post.id;
@@ -214,7 +242,7 @@ export function PostEditor(props: EditorProps) {
 
   /* ---------------- derived quality ---------------- */
   const deferred = useDeferredValue(body);
-  const lint = useMemo(() => lintPost(deferred, props.voiceStats, { facts: props.facts ?? undefined, neverSay: props.neverSay }), [deferred, props.voiceStats, props.facts, props.neverSay]);
+  const lint = useMemo(() => lintPost(deferred, props.voiceStats, { facts: props.facts ?? undefined, notes: props.notes ?? undefined, neverSay: props.neverSay }), [deferred, props.voiceStats, props.facts, props.notes, props.neverSay]);
   const critique: Critique | null = post.quality?.critique ?? null;
   const critiqueFresh = isCritiqueFresh(post.quality, body);
   const score = combineScore(lint.score, lint.issues, critiqueFresh ? critique : null);
@@ -222,7 +250,7 @@ export function PostEditor(props: EditorProps) {
 
   const angleField = useMemo(() => parseAngleField(post.angle), [post.angle]);
   const recommended = useMemo(() => (detail.memory ? recommendStructures(detail.memory, { hasPhoto: !!post.photoId })[0] : "scene-lesson"), [detail.memory, post.photoId]);
-  const pillar = props.pillars.find((p) => p.id === post.pillar) ?? null;
+  const pillar = props.pillars.find((p) => p.id === post.pillar) ?? props.pillars.find((p) => p.name.trim().toLowerCase() === (post.pillar ?? "").trim().toLowerCase()) ?? null;
 
   /* ---------------- UI state ---------------- */
   const [busy, setBusy] = useState<Busy>(null);
@@ -242,6 +270,8 @@ export function PostEditor(props: EditorProps) {
   const locked = busy !== null || streaming;
   const published = post.status === "published";
   const archived = post.status === "archived";
+  /** Set while the scheduler or a "Publish now" is sending the post (M6's in-flight marker). */
+  const publishingAt = publishingSince(post.error);
 
   const refresh = useCallback(async () => {
     const d = await api<PostDetail>(`/api/posts/${id}`);
@@ -265,9 +295,12 @@ export function PostEditor(props: EditorProps) {
       const sent = bodyRef.current;
       try {
         const res = await api<{ post: Post; critique: Critique }>("/api/studio/critique", { method: "POST", json: { postId: id, body: sent } });
-        savedRef.current = sent;
         setDetail((d) => ({ ...d, post: res.post }));
-        setSaveState(bodyRef.current === sent ? "saved" : "dirty");
+        // The critique saves the text it read. If the user kept typing meanwhile, autosave owns the state.
+        if (res.post.body === sent && bodyRef.current === sent) {
+          savedRef.current = sent;
+          setSaveState("saved");
+        }
         if (!opts.auto) toast("Critique ready");
       } catch (e) {
         const msg = (e as Error).message;
@@ -302,7 +335,17 @@ export function PostEditor(props: EditorProps) {
       setBody(before);
       if (ctrl.signal.aborted) {
         toast("Stopped. Your previous text is back.", "info");
-        void refresh().catch(() => undefined);
+        // If the writer finished just before the stop, the server kept its version: show what's stored.
+        try {
+          const d = await refresh();
+          if (before === savedRef.current) {
+            setBody(d.post.body);
+            savedRef.current = d.post.body;
+            setSaveState("saved");
+          }
+        } catch {
+          /* keep the local text; the next edit saves it */
+        }
       } else {
         const msg = (e as Error).message;
         setInlineError(msg);
@@ -511,6 +554,10 @@ export function PostEditor(props: EditorProps) {
   const changePillar = (pillarId: string | null) => void patch({ pillar: pillarId }, "Pillar updated");
 
   /* ---------------- render ---------------- */
+  const photoHints: string[] = [];
+  if (detail.photo?.width && detail.photo.height && detail.photo.width > detail.photo.height * 1.05) photoHints.push("Landscape photo. A portrait (4:5) photo takes up more of the feed.");
+  if (detail.photo?.isCandid === false) photoHints.push("This looks posed or stock. A candid phone photo from the moment usually does better.");
+
   const chars = body.trim().length;
   const words = (body.match(/\S+/g) ?? []).length;
   const hasBody = body.trim().length > 0;
@@ -602,13 +649,19 @@ export function PostEditor(props: EditorProps) {
             {post.scheduledAt && post.status !== "published" && (
               <Chip tone={post.status === "scheduled" ? "indigo" : "gray"}>
                 <CalendarClock className="size-3" />
-                {post.status === "scheduled" ? formatWhen(post.scheduledAt) : `Planned ${formatWhen(post.scheduledAt, { withTime: false })}`}
+                {post.status === "scheduled" ? (
+                  <When iso={post.scheduledAt} />
+                ) : (
+                  <>
+                    Planned <When iso={post.scheduledAt} withTime={false} />
+                  </>
+                )}
               </Chip>
             )}
-            {post.error && (
-              <Chip tone="red">
-                <AlertTriangle className="size-3" />
-                {post.error.slice(0, 60)}
+            {post.error && !published && (
+              <Chip tone={publishingAt ? "blue" : "red"}>
+                {publishingAt ? <Send className="size-3" /> : <AlertTriangle className="size-3" />}
+                {publishingAt ? "Publishing" : "Publish failed"}
               </Chip>
             )}
           </div>
@@ -621,7 +674,12 @@ export function PostEditor(props: EditorProps) {
               { label: "Copy text", icon: Clipboard, onClick: () => void copy(false), hidden: !hasBody },
               { label: "Copy & open LinkedIn", icon: ExternalLink, onClick: () => void copy(true), hidden: !hasBody },
               { label: "Download photo", icon: Download, onClick: () => window.open(photoSrc(post.photoId!, "full", true), "_blank"), hidden: !post.photoId },
-              { label: "Publish now on LinkedIn", icon: Send, onClick: () => void publish({}, "Published on LinkedIn"), hidden: !(post.status === "approved" || post.status === "scheduled") },
+              {
+                label: post.error ? "Try publishing again" : "Publish now on LinkedIn",
+                icon: Send,
+                onClick: () => void publish(post.error ? { retry: true } : {}, "Published on LinkedIn"),
+                hidden: !(post.status === "approved" || post.status === "scheduled"),
+              },
               { label: "Mark as posted by hand", icon: CheckCircle2, onClick: () => setSheet("mark-posted"), hidden: !(post.status === "approved" || post.status === "scheduled") },
               { label: "Version history", icon: History, onClick: () => setSheet("versions") },
               { label: "Archive", icon: Archive, onClick: () => void archive(), hidden: archived || published },
@@ -631,13 +689,47 @@ export function PostEditor(props: EditorProps) {
         </div>
       </header>
 
-      {post.status === "scheduled" && post.scheduledAt && Date.parse(post.scheduledAt) <= Date.now() && (
+      {post.error && !published && (
+        <div
+          className="flex flex-wrap items-center justify-between gap-3 rounded-panel px-5 py-4 animate-in"
+          role={publishingAt ? "status" : "alert"}
+          style={{ background: `color-mix(in srgb, var(${publishingAt ? "--sys-blue" : "--sys-red"}) 10%, transparent)` }}
+        >
+          <div className="flex min-w-0 items-start gap-3">
+            {publishingAt ? <Send className="mt-0.5 size-5 shrink-0 text-sys-blue" /> : <AlertTriangle className="mt-0.5 size-5 shrink-0 text-sys-red" />}
+            <div className="min-w-0">
+              <div className="t-headline">{publishingAt ? "Publishing to LinkedIn…" : "Not on LinkedIn yet"}</div>
+              <p className="t-footnote text-label-2 [overflow-wrap:anywhere]">
+                {publishingAt ? (
+                  <>
+                    Started <When iso={publishingAt.toISOString()} />. If nothing changes in a few minutes, check your feed before trying again, so it doesn't go out twice.
+                  </>
+                ) : (
+                  post.error
+                )}
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {(post.status === "approved" || post.status === "scheduled") && (
+              <Button variant="glass" icon={<RotateCcw className="size-4" />} onClick={() => void publish({ retry: true }, "Published on LinkedIn")} loading={busy === "publish"} disabled={locked}>
+                Try again
+              </Button>
+            )}
+            <Button variant="plain" onClick={() => setSheet("mark-posted")} disabled={locked}>
+              It's on LinkedIn already
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {hydrated && post.status === "scheduled" && post.scheduledAt && Date.parse(post.scheduledAt) <= Date.now() && (
         <div className="glass flex flex-wrap items-center justify-between gap-3 rounded-panel px-5 py-4 animate-in" role="status">
           <div className="flex items-start gap-3">
             <CalendarClock className="mt-0.5 size-5 shrink-0" style={{ color: "var(--sys-orange)" }} />
             <div>
               <div className="t-headline">Due now</div>
-              <p className="t-footnote text-label-2">It was planned for {formatWhen(post.scheduledAt)}. Copy it to LinkedIn with the photo, then mark it as posted so Insights can track it.</p>
+              <p className="t-footnote text-label-2">It was planned for <When iso={post.scheduledAt} />. Copy it to LinkedIn with the photo, then mark it as posted so Insights can track it.</p>
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -656,10 +748,13 @@ export function PostEditor(props: EditorProps) {
           <div className="flex items-start gap-3">
             <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-sys-purple" />
             <div>
-              <div className="t-headline">Published{post.publishedAt ? ` ${formatWhen(post.publishedAt)}` : ""}</div>
+              <div className="t-headline">
+                Published{post.publishedAt ? " " : ""}
+                <When iso={post.publishedAt} />
+              </div>
               <p className="t-footnote text-label-2">
                 {post.reactions !== null || post.comments !== null
-                  ? `${post.reactions ?? 0} reactions · ${post.comments ?? 0} comments${post.impressions ? ` · ${post.impressions.toLocaleString()} impressions` : ""}`
+                  ? `${post.reactions ?? 0} reactions · ${post.comments ?? 0} comments${post.impressions ? ` · ${post.impressions.toLocaleString("en")} impressions` : ""}`
                   : "Add its numbers in Insights a day or two after posting, so planning learns what works."}
               </p>
             </div>
@@ -674,7 +769,7 @@ export function PostEditor(props: EditorProps) {
         {/* Story context */}
         <aside className="order-3 lg:col-span-2 xl:order-1 xl:col-span-1">
           <div className="xl:sticky xl:top-6 space-y-4">
-            <StoryPanel memory={detail.memory} angle={angleField.selected} pillars={props.pillars} pillarId={post.pillar} onPillar={changePillar} voiceSamples={props.voiceSamples} disabled={locked} />
+            <StoryPanel memory={detail.memory} angle={angleField.selected} pillars={props.pillars} pillarId={pillar?.id ?? null} onPillar={changePillar} voiceSamples={props.voiceSamples} disabled={locked} />
           </div>
         </aside>
 
@@ -753,7 +848,7 @@ export function PostEditor(props: EditorProps) {
 
             <div className="flex flex-wrap items-center justify-between gap-2 border-t border-separator px-4 py-2.5 t-footnote text-label-2">
               <span className={cx("tabular-nums", chars > LINKEDIN_MAX_CHARS && "font-semibold text-sys-red")}>
-                {chars.toLocaleString()} / {LINKEDIN_MAX_CHARS.toLocaleString()} · {words} words
+                {chars.toLocaleString("en")} / {LINKEDIN_MAX_CHARS.toLocaleString("en")} · {words} words
               </span>
               <span className="hidden sm:inline">Dashed line: where LinkedIn shows “see more” on desktop</span>
             </div>
@@ -810,6 +905,7 @@ export function PostEditor(props: EditorProps) {
         <aside className="order-2 xl:order-3 min-w-0 space-y-6">
           <QualityPanel
             hasBody={hasBody && !streaming}
+            memoryId={detail.memory?.id ?? null}
             lint={lint.issues}
             lintScore={lint.score}
             score={score}
@@ -848,6 +944,15 @@ export function PostEditor(props: EditorProps) {
                   <Button size="sm" variant="plain" icon={<Clipboard className="size-3.5" />} onClick={() => void copy(false)}>
                     Copy text
                   </Button>
+                )}
+                {photoHints.length > 0 && (
+                  <ul className="w-full space-y-1 pt-1">
+                    {photoHints.map((h) => (
+                      <li key={h} className="t-caption text-label-2 text-center">
+                        {h}
+                      </li>
+                    ))}
+                  </ul>
                 )}
               </>
             }
@@ -898,6 +1003,7 @@ export function PostEditor(props: EditorProps) {
         onClose={() => setSheet(null)}
         current={post.scheduledAt}
         cadence={props.cadence}
+        timezone={props.timezone}
         taken={props.taken}
         needsApproval={post.status !== "approved" && post.status !== "scheduled"}
         missingPhoto={!post.photoId}

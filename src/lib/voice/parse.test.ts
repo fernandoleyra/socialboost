@@ -62,6 +62,30 @@ describe("cleanPostText", () => {
   });
 });
 
+describe("cleanPostText keeps what the person wrote", () => {
+  it("doesn't mistake a short time line in the post for the author block", () => {
+    const post = `I timed my morning routine for a month.\n\n10 min\n\n${LONG_A}`;
+    expect(cleanPostText(post).text).toBe(post);
+    const post2 = `We shipped it.\n\n24h.\n\n${LONG_B}`;
+    expect(cleanPostText(post2).text).toBe(post2);
+  });
+
+  it("still drops a bare time line under the author's name", () => {
+    expect(cleanPostText(["Mara Jensen", "Warehouse fixer", "1w", LONG_A].join("\n"), { headerLines: ["Mara Jensen"] }).text).toBe(LONG_A);
+  });
+
+  it("keeps a closing number when there was no LinkedIn UI around it", () => {
+    const post = `My year in one number.\n\n${LONG_A}\n\n2026`;
+    expect(cleanPostText(post).text).toBe(post);
+  });
+
+  it("is idempotent", () => {
+    const raw = ["Mara Jensen", "• You", "1w • Edited •", LONG_A, "", "#ops", "42", "7 comments", "Like", "Comment"].join("\n");
+    const once = cleanPostText(raw).text;
+    expect(cleanPostText(once).text).toBe(once);
+  });
+});
+
 describe("parsePastedPosts", () => {
   it("splits on separator lines", () => {
     const r = parsePastedPosts(`${LONG_A}\n---\n${LONG_B}\n***\n${LONG_A} Again, slightly different.`);
@@ -137,6 +161,11 @@ describe("parseSharesCsv", () => {
     expect(r.posts[1].text).toBe(`${LONG_B} Thanks Joost de Vries.`);
   });
 
+  it("keeps only web links", () => {
+    const r = parseSharesCsv(`Date,ShareLink,ShareCommentary\n2024-01-01,javascript:alert(1),"${LONG_A}"`);
+    expect(r.posts[0].url).toBeUndefined();
+  });
+
   it("matches headers by alias, not position or casing", () => {
     const r = parseSharesCsv(`SHARE_COMMENTARY,date\n"${LONG_A}",2024-02-01 12:00:00`);
     expect(r.posts[0].text).toBe(LONG_A);
@@ -164,6 +193,12 @@ describe("parseHelperJson", () => {
     expect(r.posts[0]).toMatchObject({ reactions: 1204, comments: 31, reposts: 2, impressions: 12400, postedAt: "2026-09-17T08:00:00.000Z" });
     expect(r.posts[1].url).toBeUndefined();
     expect(r.posts[1].truncated).toBe(true);
+  });
+
+  it("leaves already-clean texts alone when asked (preview of Shares.csv posts)", () => {
+    const text = `${LONG_A}\n\nLike\n\n2026`;
+    expect(parseHelperJson(JSON.stringify([{ text }]), { clean: false }).posts[0].text).toBe(text);
+    expect(parseHelperJson(JSON.stringify([{ text }])).posts[0].text).not.toContain("Like");
   });
 
   it("accepts {posts: [...]} and rejects non-JSON", () => {

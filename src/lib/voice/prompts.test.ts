@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { VoiceGuide } from "@/lib/types";
 import { MARA_POSTS } from "./__fixtures__/corpus";
-import { analysisBudget, buildAnalysisPrompt, buildVoicePromptBlock, reconcileGuide, sanitizeGuide, statRules } from "./prompts";
+import { analysisBudget, buildAnalysisPrompt, buildVoicePromptBlock, groundGuide, reconcileGuide, sanitizeGuide, statRules } from "./prompts";
 import { computeVoiceExtras, computeVoiceStats } from "./stylometry";
 
 const EMPTY_GUIDE: VoiceGuide = { summary: "", tone: [], hookPatterns: [], structure: [], formatting: [], vocabulary: [], signatureMoves: [], neverDoes: [] };
@@ -28,6 +28,13 @@ describe("buildVoicePromptBlock", () => {
     expect(block).toContain("- I never: Never moralises at the end");
     expect(lines.at(-2)).toMatch(/^My own rules/);
     expect(lines.at(-1)).toBe('- Never say "leverage"');
+  });
+
+  it("gives the writer hook patterns without the quoted examples", () => {
+    const guide: VoiceGuide = { ...EMPTY_GUIDE, hookPatterns: ['Opens on a time and place: "Yesterday at 6:40 a.m."', "States years of experience (e.g. \"six years\")"] };
+    const block = buildVoicePromptBlock({ stats: null, guide, manualRules: [], extras: null });
+    expect(block).toContain("- Hooks: Opens on a time and place; States years of experience");
+    expect(block).not.toContain("6:40");
   });
 
   it("works with only manual rules", () => {
@@ -57,6 +64,62 @@ describe("sanitizeGuide", () => {
     expect(g.summary).toBe("Plain and direct.");
     expect(g.tone).toEqual(["dry", "direct", "warm", "calm", "blunt", "curious"]);
     expect(g.vocabulary).toEqual(['"by feel"']);
+  });
+});
+
+describe("groundGuide", () => {
+  // Shaped like a real answer from a 3B local model on this corpus.
+  const small: VoiceGuide = {
+    ...EMPTY_GUIDE,
+    hookPatterns: ["Yesterday at 6:40 a.m. a driver named Joost handed me a paper map of our yard.", "I have spent six years fixing warehouses that everyone else had given up on."],
+    vocabulary: ["I", "warehouse", "drivers", "success criteria", '"I mean it"', '"synergy at scale"', "The planners got a raise", '"The night shift knows more than the dashboard"'],
+    neverDoes: ["I mean it", "I am proud of", "No emojis are used.", "Never uses hashtags"],
+  };
+  const g = groundGuide(small, MARA_POSTS, stats);
+
+  it("keeps only real absences in never-does", () => {
+    expect(g.neverDoes).toEqual(["No emojis are used.", "Never uses hashtags"]);
+  });
+
+  it("replaces pasted first lines with measured hook patterns", () => {
+    expect(g.hookPatterns.length).toBeGreaterThanOrEqual(2);
+    expect(g.hookPatterns.some((h) => h.startsWith("A scene (time or place):") && h.includes("Yesterday at 6:40"))).toBe(true);
+    expect(g.hookPatterns).not.toContain(small.hookPatterns[0]);
+  });
+
+  it("keeps phrases the person actually says, led by measured signature phrases", () => {
+    expect(g.vocabulary[0]).toBe('"And one more"');
+    expect(g.vocabulary).toContain('"I mean it"');
+    expect(g.vocabulary).toEqual(['"And one more"', '"Do you see the same"', '"I mean it"']);
+    expect(g.vocabulary).not.toContain('"synergy at scale"');
+  });
+
+  it("drops quotes that aren't the person's words (copied from the prompt's example)", () => {
+    const copied = groundGuide(
+      { ...EMPTY_GUIDE, hookPatterns: ['Opens on a time and place: "Monday, 7 a.m., ward 4."', 'States experience: "I have spent six years"'], vocabulary: ['"I"', '"the same"', '"one more"', '"never"'], signatureMoves: ['Says "here is the thing about night shifts"', "Ends with a question"] },
+      MARA_POSTS,
+      stats,
+    );
+    expect(copied.hookPatterns).toContain('States experience: "I have spent six years"');
+    expect(copied.hookPatterns.join()).not.toContain("ward 4");
+    expect(copied.vocabulary).toEqual(['"And one more"', '"Do you see the same"']);
+    expect(copied.vocabulary).not.toContain('"I"');
+    expect(copied.vocabulary).not.toContain('"the same"');
+    expect(copied.signatureMoves).toEqual(["Ends with a question"]);
+  });
+
+  it("builds clean measured hook patterns even when a first line has quotes in it", () => {
+    const posts = ['I bet half of all "AI in logistics" projects will be renamed by Christmas.\n\nMore text here for the body.', ...MARA_POSTS.slice(1)];
+    const gg = groundGuide(EMPTY_GUIDE, posts, computeVoiceStats(posts));
+    const block = buildVoicePromptBlock({ stats: null, guide: gg, manualRules: [], extras: null });
+    expect(gg.hookPatterns.join("\n")).toContain("'AI in logistics'");
+    expect(block).toMatch(/- Hooks: [A-Z][a-z ()]+; [A-Z][a-z ()]+/);
+    expect(block).not.toContain("logistics");
+  });
+
+  it("leaves good pattern descriptions alone", () => {
+    const ok = groundGuide({ ...EMPTY_GUIDE, hookPatterns: ['Opens on a time and place: "Yesterday at 6:40 a.m."', "States years of experience up front"] }, MARA_POSTS, stats);
+    expect(ok.hookPatterns).toEqual(['Opens on a time and place: "Yesterday at 6:40 a.m."', "States years of experience up front"]);
   });
 });
 
