@@ -111,6 +111,8 @@ in the EEA and Switzerland can also use LinkedIn's Member Data Portability API t
 
 ## The workflow
 
+Step-by-step for your first week, plus what to check on your own data: [docs/FIRST_WEEK.md](docs/FIRST_WEEK.md).
+
 1. **Positioning interview** (10–15 min) → Strategy: who you're writing for, 3–4 content pillars, cadence, CTA.
 2. **Import your posts** in Voice → style guide and examples.
 3. **Story interviews** (10 min each, or quick-capture from Today) → stories in the Memory Bank, each with a photo.
