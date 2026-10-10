@@ -72,7 +72,7 @@ export function ImportPreview({
           </div>
           <p className="t-footnote text-label-2">
             Untick anything that isn&apos;t {kind === "own" ? "yours" : `by ${author || "this creator"}`}.
-            {parsed.skipped > 0 && ` ${parsed.skipped} left out: reposts without your words, duplicates or fragments.`}
+            {parsed.skipped > 0 && ` ${parsed.skipped} left out: ${kind === "own" ? "reposts without your words, " : ""}duplicates or fragments too short to learn from.`}
           </p>
         </div>
         <Button variant="plain" size="sm" onClick={() => setSelected(all ? new Set() : new Set(parsed.posts.map((_, i) => i)))}>

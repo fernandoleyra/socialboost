@@ -165,7 +165,7 @@ export function StyleGuide({
                 ) : s.key === "tone" ? (
                   <div className="flex flex-wrap gap-1.5">
                     {guide.tone.map((t, i) => (
-                      <Chip key={`${i}-${t}`} tone="blue">
+                      <Chip key={`${i}-${t}`} tone="blue" className="!h-auto min-h-6 whitespace-normal py-0.5">
                         {t}
                       </Chip>
                     ))}

@@ -148,7 +148,7 @@ describe("buildAnalysisPrompt", () => {
     expect(prompt).toContain("Below are 2 LinkedIn posts written by Mara Jensen.");
     expect(prompt).toContain("<post 1>");
     expect(prompt).toContain("</post 2>");
-    expect(prompt).toContain("MEASURED FACTS (counted by code across 7 posts");
+    expect(prompt).toContain("MEASURED FACTS about these posts, counted by code across 7 posts");
     expect(prompt).toContain("8. neverDoes:");
     expect(prompt).toContain("Most common ending: a question");
   });

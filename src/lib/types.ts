@@ -217,6 +217,8 @@ export type Post = {
   status: PostStatus;
   scheduledAt: string | null;
   publishedAt: string | null;
+  /** When a person approved this exact text for publishing (cleared if the text changes afterwards). */
+  approvedAt?: string | null;
   linkedinUrn: string | null;
   linkedinUrl: string | null;
   quality: PostQuality | null;

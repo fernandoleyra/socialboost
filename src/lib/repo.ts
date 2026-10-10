@@ -567,6 +567,7 @@ type PostRow = {
   status: PostStatus;
   scheduled_at: string | null;
   published_at: string | null;
+  approved_at: string | null;
   linkedin_urn: string | null;
   linkedin_url: string | null;
   quality: string | null;
@@ -591,6 +592,7 @@ const toPost = (r: PostRow): Post => ({
   status: r.status,
   scheduledAt: r.scheduled_at,
   publishedAt: r.published_at,
+  approvedAt: r.approved_at,
   linkedinUrn: r.linkedin_urn,
   linkedinUrl: r.linkedin_url,
   quality: parseJson<PostQuality | null>(r.quality, null),
@@ -644,9 +646,17 @@ export function updatePost(id: string, patch: Partial<Omit<Post, "id" | "profile
   const cur = getPost(id);
   if (!cur) throw new HttpError(404, "Post not found");
   const n = { ...cur, ...patch };
+  // Approval audit: stamp the moment a person approves. Editing approved text (only the person does
+  // that in the editor) re-stamps it, so approved_at always refers to the text that will go out.
+  const APPROVED: Post["status"][] = ["approved", "scheduled", "published"];
+  let approvedAt = cur.approvedAt ?? null;
+  if (!APPROVED.includes(n.status)) approvedAt = null;
+  else if (!APPROVED.includes(cur.status) || (patch.body !== undefined && patch.body !== cur.body && n.status !== "published")) {
+    approvedAt = new Date().toISOString();
+  }
   getDb()
     .prepare(
-      `UPDATE posts SET memory_id=?, photo_id=?, pillar=?, format=?, angle=?, body=?, status=?, scheduled_at=?, published_at=?, linkedin_urn=?, linkedin_url=?, quality=?,
+      `UPDATE posts SET memory_id=?, photo_id=?, pillar=?, format=?, angle=?, body=?, status=?, scheduled_at=?, published_at=?, approved_at=?, linkedin_urn=?, linkedin_url=?, quality=?,
        impressions=?, reactions=?, comments=?, reposts=?, metrics_updated_at=?, error=?, updated_at=datetime('now') WHERE id=?`,
     )
     .run(
@@ -659,6 +669,7 @@ export function updatePost(id: string, patch: Partial<Omit<Post, "id" | "profile
       n.status,
       n.scheduledAt,
       n.publishedAt,
+      approvedAt,
       n.linkedinUrn,
       n.linkedinUrl,
       n.quality ? JSON.stringify(n.quality) : null,

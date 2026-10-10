@@ -50,7 +50,10 @@ function AnalyzeBanner({ started, postCount, onCancel }: { started: number; post
       <div className="min-w-0 flex-1">
         <div className="t-subhead font-semibold">Reading your {postCount} posts…</div>
         <div className="t-footnote text-label-2">
-          {secs < 20 ? "Measuring your writing and indexing posts for examples." : "Your model is writing the style guide. On a local model this takes a minute or two."} {secs}s
+          {secs < 20 ? "Measuring your writing and indexing posts for examples." : "Your model is writing the style guide. On a local model this takes a minute or two."}{" "}
+          <span aria-hidden className="tabular-nums">
+            {secs}s
+          </span>
         </div>
       </div>
       <Button size="sm" variant="glass" onClick={onCancel}>
@@ -73,6 +76,28 @@ export function VoiceStudio({ initial, author }: { initial: VoiceState; author: 
   const analyzing = analyzeStarted !== null;
 
   useEffect(() => () => abortRef.current?.abort(), []);
+
+  // New posts are indexed for example matching in the background: keep the count live until it
+  // catches up, or stops moving (no embedding model answering).
+  const indexing = state.embeddingsConfigured && state.counts.indexed < state.counts.own;
+  useEffect(() => {
+    if (!indexing || analyzing) return;
+    let last = -1;
+    let still = 0;
+    let polls = 0;
+    const timer = setInterval(async () => {
+      try {
+        const next = await api<VoiceState>("/api/voice");
+        setState((st) => ({ ...st, counts: next.counts }));
+        still = next.counts.indexed === last ? still + 1 : 0;
+        last = next.counts.indexed;
+        if (next.counts.indexed >= next.counts.own || still >= 5 || ++polls >= 60) clearInterval(timer);
+      } catch {
+        clearInterval(timer);
+      }
+    }, 4000);
+    return () => clearInterval(timer);
+  }, [indexing, analyzing, state.counts.own]);
 
   const analyze = useCallback(async () => {
     if (abortRef.current) return;
@@ -212,7 +237,7 @@ export function VoiceStudio({ initial, author }: { initial: VoiceState; author: 
       >
         <div className="space-y-3">
           <p className="t-footnote text-label-2">This block goes into every draft and revision, next to two or three of your posts closest to the topic. Edit the style guide or your rules to change it.</p>
-          <pre className="li-text whitespace-pre-wrap rounded-[16px] bg-fill-4 p-4">{state.promptBlock}</pre>
+          <pre className="li-text whitespace-pre-wrap break-words rounded-[16px] bg-fill-4 p-4">{state.promptBlock}</pre>
         </div>
       </Sheet>
     </div>

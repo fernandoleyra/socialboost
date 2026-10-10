@@ -204,7 +204,7 @@ export function SamplesList({
             {embeddingsConfigured
               ? indexed >= samples.length
                 ? "All indexed: the writer sees the ones closest to each new post as examples."
-                : `${indexed} of ${samples.length} indexed for topic matching. The rest are indexed in the background; if this number stays put after a reload, check the embedding model in Settings → Models.`
+                : `${indexed} of ${samples.length} indexed for topic matching. The rest are being indexed in the background. If this number stops moving, check the embedding model in Settings → Models.`
               : "The writer picks your best and most recent posts as examples. Set an embedding model in Settings → Models to match by topic."}
           </p>
         </div>

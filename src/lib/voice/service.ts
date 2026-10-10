@@ -1,7 +1,7 @@
 import "server-only";
 import { getDb, logActivity } from "@/lib/db";
 import { HttpError } from "@/lib/http";
-import { LLMError, chatJson, embed } from "@/lib/llm";
+import { chatJson, embed } from "@/lib/llm";
 import {
   getProfile,
   getVoiceProfile,
@@ -170,6 +170,12 @@ export function embedPending(profileId: string): Promise<number> {
   return job;
 }
 
+/** Start indexing own posts that have no vector yet, without waiting (after an import or an embedding-model change). */
+export function indexInBackground(profileId: string) {
+  if (!getRoute("embedding") || unembeddedIds(profileId).length === 0) return;
+  void embedPending(profileId).catch((err) => console.warn("[voice] embedding failed:", err instanceof Error ? err.message : err));
+}
+
 /* ------------------------------------------------------------------ */
 /* Import                                                              */
 /* ------------------------------------------------------------------ */
@@ -221,10 +227,8 @@ export async function importVoice(profile: Profile, req: ImportRequest): Promise
   const warnings = [...parsed.warnings];
   if (req.kind === "own") {
     refreshStats(profile.id);
-    if (inserted > 0) {
-      // Index the new posts for example retrieval without making the person wait.
-      void embedPending(profile.id).catch((err) => console.warn("[voice] embedding failed:", err instanceof Error ? err.message : err));
-    }
+    // Index the new posts for example retrieval without making the person wait.
+    if (inserted > 0) indexInBackground(profile.id);
     if (origin === "export" && inserted > 0) {
       warnings.push("LinkedIn's export has no reactions or comments. Add the numbers to your best posts below so the writer learns from those first.");
     }
@@ -279,9 +283,6 @@ export function updateVoiceProfile(profileId: string, patch: ProfileUpdate): Voi
 /* Analysis                                                            */
 /* ------------------------------------------------------------------ */
 
-/** Past this, a failed model call is almost certainly the HTTP client timing out, not Ollama being down. */
-const SLOW_MODEL_MS = 280_000;
-
 /**
  * Measure the posts, index them for retrieval, and have the extractor model write the style
  * guide from the best/most recent posts that fit its context. Manual rules are kept.
@@ -305,24 +306,15 @@ export async function analyzeVoice(profile: Profile, signal?: AbortSignal): Prom
   const route = getRoute("extractor");
   const budget = analysisBudget({ providerKind: route?.provider.kind ?? "ollama", numCtx: route?.numCtx ?? 8192 });
   const posts = selectForAnalysis(own, budget);
-  const started = Date.now();
-  let raw;
-  try {
-    raw = await chatJson(VoiceGuideSchema, {
-      task: "extractor",
-      system: ANALYSIS_SYSTEM,
-      messages: [{ role: "user", content: buildAnalysisPrompt({ name: profile.name, posts, stats, extras }) }],
-      temperature: 0.2,
-      maxTokens: 1200,
-      signal,
-    });
-  } catch (err) {
-    // A slow CPU-only model can outlive the HTTP client's 5-minute wait; "couldn't reach" would mislead.
-    if (err instanceof LLMError && !signal?.aborted && Date.now() - started > SLOW_MODEL_MS) {
-      throw new LLMError("The model took more than 5 minutes to answer, so the request gave up.", "Pick a smaller or faster model for the Extractor task in Settings → Models, then try again.");
-    }
-    throw err;
-  }
+  // Model errors (no model configured, Ollama down, invalid JSON twice) surface as LLMError with a hint.
+  const raw = await chatJson(VoiceGuideSchema, {
+    task: "extractor",
+    system: ANALYSIS_SYSTEM,
+    messages: [{ role: "user", content: buildAnalysisPrompt({ name: profile.name, posts, stats, extras }) }],
+    temperature: 0.2,
+    maxTokens: 1200,
+    signal,
+  });
   const guide = reconcileGuide(groundGuide(sanitizeGuide(raw), texts, stats), stats, extras);
 
   // Posts may have been added or removed while the model was thinking; keep the numbers current.

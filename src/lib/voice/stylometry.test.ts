@@ -68,6 +68,19 @@ describe("computeVoiceStats", () => {
     expect(stats.commonOpeners).toEqual([]);
   });
 
+  it("keeps facts out of reused openers and closers", () => {
+    const posts = [
+      "Six years ago I quit my job at the port. It was the best call I ever made.",
+      "Six years ago I could not read a balance sheet. Now I teach it on Fridays.",
+      "Last week in Hamburg a client asked me the wrong question. See you in Hamburg",
+      "Last week in Hamburg the trains stopped and we met in a cafe instead. See you in Hamburg",
+    ];
+    const s = computeVoiceStats(posts);
+    expect(s.commonOpeners.join(" ").toLowerCase()).not.toMatch(/six years|hamburg/);
+    expect(s.commonOpeners.some((p) => /^last week/i.test(p))).toBe(true);
+    expect(s.commonClosers.join(" ")).not.toMatch(/Hamburg/);
+  });
+
   it("counts emojis, hashtags and dashes", () => {
     const s = computeVoiceStats([
       "Big week 🚀🚀 for the team 👩‍💻. It was a lot — really.\n\n#ops #logistics",

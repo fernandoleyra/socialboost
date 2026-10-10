@@ -50,7 +50,7 @@ export function HelperPanel({ onParsed }: { onParsed: (r: ParseResult) => void }
       <ol className="space-y-3">
         <Step n={1}>
           On a computer, open LinkedIn and go to your own activity: <span className="font-medium">Me → View profile → Show all posts</span>. The address looks like{" "}
-          <code className="rounded bg-fill-3 px-1 py-0.5 text-[13px]">linkedin.com/in/you/recent-activity/all/</code>.
+          <code className="break-all rounded bg-fill-3 px-1 py-0.5 text-[13px]">linkedin.com/in/you/recent-activity/all/</code>.
         </Step>
         <Step n={2}>
           Run the helper. Either drag this button to your bookmarks bar and click it there,{" "}

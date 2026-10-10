@@ -93,7 +93,8 @@ export function buildVoicePromptBlock(input: { stats: VoiceStats | null; guide: 
   const guideLines: string[] = [];
   if (g.summary.trim()) guideLines.push(`- Overall: ${clip(g.summary.trim(), 320)}`);
   const list = (label: string, xs: string[], max: number, joiner = "; ") => {
-    const items = xs.map((x) => clip(x.trim(), 140)).filter(Boolean).slice(0, max);
+    // Items are joined on one line, so their own end punctuation goes ("No emojis.; No hashtags.").
+    const items = xs.map((x) => clip(x.trim().replace(/[.;,]+$/, ""), 140)).filter(Boolean).slice(0, max);
     if (items.length) guideLines.push(`- ${label}: ${items.join(joiner)}`);
   };
   list("Tone", g.tone, 6, ", ");
@@ -132,10 +133,10 @@ export function buildAnalysisPrompt(input: { name: string; posts: { text: string
   }
   const who = name.trim() || "this person";
   return [
-    `Below are ${posts.length} LinkedIn posts written by ${who}.`,
+    posts.length === 1 ? `Below is 1 LinkedIn post written by ${who}.` : `Below are ${posts.length} LinkedIn posts written by ${who}.`,
     "",
     ...posts.flatMap((p, i) => [`<post ${i + 1}>`, p.text.trim(), `</post ${i + 1}>`, ""]),
-    `MEASURED FACTS (counted by code across ${stats.sampleCount} posts; trust them over your impression):`,
+    `MEASURED FACTS about these posts, counted by code across ${stats.sampleCount} posts and written as ${who} would say them ("I", "my posts"). Trust them over your impression:`,
     ...facts,
     "",
     "Write a style guide with these fields:",

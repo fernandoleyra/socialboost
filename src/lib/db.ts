@@ -189,6 +189,11 @@ const MIGRATIONS: string[] = [
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
   `,
+  // 2 — approval audit trail. AI-assisted posts are published only after a person approves them
+  // (EU AI Act Art. 50 human-review exemption, LinkedIn Developer AI policy); record when.
+  `
+  ALTER TABLE posts ADD COLUMN approved_at TEXT;
+  `,
 ];
 
 type DB = Database.Database;

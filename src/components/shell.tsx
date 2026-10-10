@@ -209,13 +209,18 @@ export function Shell({ profiles, activeId, children }: { profiles: ShellProfile
       <main className="mx-auto w-full max-w-[1240px] px-4 pb-32 pt-4 sm:px-6 lg:px-10 lg:pt-10 lg:pb-16">{children}</main>
 
       {/* Mobile floating tab bar */}
-      <nav className="glass glass-lens fixed inset-x-4 bottom-4 z-30 flex items-center justify-around rounded-full px-2 py-1.5 lg:hidden">
+      <nav aria-label="Main" className="glass glass-lens fixed inset-x-3 bottom-3 z-30 flex items-center gap-0.5 rounded-full px-1.5 py-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))] lg:hidden">
         {NAV.filter((n) => MOBILE_NAV.includes(n.href)).map(({ href, label, icon: Icon }) => {
           const active = isActive(pathname, href);
           return (
-            <Link key={href} href={href} className={cx("flex flex-col items-center gap-0.5 rounded-full px-3 py-1.5 transition-colors", active ? "text-accent bg-fill-4" : "text-label-2")}>
+            <Link
+              key={href}
+              href={href}
+              aria-current={active ? "page" : undefined}
+              className={cx("flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-full px-1 py-1.5 transition-colors", active ? "text-accent bg-fill-4" : "text-label-2")}
+            >
               <Icon className="size-5" />
-              <span className="text-[10px] font-semibold">{label.split(" ")[0]}</span>
+              <span className="max-w-full truncate text-[10px] font-semibold">{label.split(" ")[0]}</span>
             </Link>
           );
         })}
