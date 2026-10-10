@@ -1,0 +1,444 @@
+import "server-only";
+import { logActivity } from "@/lib/db";
+import { HttpError, streamText } from "@/lib/http";
+import { LLMError, chatJson, chatStream, embed } from "@/lib/llm";
+import {
+  addMessage,
+  createInterview,
+  createMemory,
+  getInterview,
+  getMemory,
+  getPhoto,
+  getProfile,
+  getStrategy,
+  listInterviews,
+  listMemories,
+  listMessages,
+  memoryEmbeddingText,
+  saveStrategy,
+  updateInterview,
+  updateMemory,
+  updatePhoto,
+  type Interview,
+  type Profile,
+} from "@/lib/repo";
+import type { Memory, Photo, Strategy } from "@/lib/types";
+import { POSITIONING_AREAS } from "./bank";
+import {
+  applyUserTurn,
+  currentThread,
+  decideNext,
+  depthScore,
+  isSingleQuestionStage,
+  planStoryInterview,
+  positioningCoverage,
+  splitThreads,
+  storyCoverage,
+  strengthFromCoverage,
+  threadHasPhoto,
+  threadPhotoDeferred,
+  type Decision,
+} from "./engine";
+import { cardToMemory, extractSummary, mergeStrategy } from "./outputs";
+import {
+  coverageCheckPrompt,
+  formatTranscript,
+  interviewerMessages,
+  interviewerSystemPrompt,
+  mentionsPhoto,
+  photoAskFallback,
+  pillarsPrompt,
+  positioningPrompt,
+  storyCardPrompt,
+  type InterviewContext,
+} from "./prompts";
+import {
+  PillarsOnlySchema,
+  PositioningCoverageCheckSchema,
+  PositioningExtractSchema,
+  StoryCoverageCheckSchema,
+  storyCardSchema,
+  type CreateInterviewBody,
+  type FinishBody,
+  type ReplyBody,
+} from "./schemas";
+import { clearInterviewState, getInterviewState, updateInterviewState } from "./store";
+import { cleanReply, filterReply, truncate, wordCount } from "./text";
+import type { ActiveInterviewKind, InterviewState, InterviewView, PillarChip, TranscriptMessage, ViewMessage } from "./types";
+import type { z } from "zod";
+
+/* ------------------------------------------------------------------ */
+/* Loading                                                             */
+/* ------------------------------------------------------------------ */
+
+export function activeKind(i: Pick<Interview, "kind">): ActiveInterviewKind {
+  return i.kind === "positioning" ? "positioning" : "story";
+}
+
+/** The interview, if it belongs to this profile — otherwise a 404 (never leak other profiles). */
+export function getOwnedInterview(profileId: string, id: string): Interview {
+  const i = getInterview(id);
+  if (!i || i.profileId !== profileId) throw new HttpError(404, "Interview not found", "It may have been deleted. Start a new one from Interviews.");
+  return i;
+}
+
+function transcriptOf(interviewId: string): (TranscriptMessage & { createdAt: string })[] {
+  return listMessages(interviewId)
+    .filter((m) => m.role !== "system")
+    .map((m) => ({ id: m.id, role: m.role as "assistant" | "user", content: m.content, photoIds: m.photoIds, createdAt: m.createdAt }));
+}
+
+function pillarChips(strategy: Strategy | null): PillarChip[] {
+  return (strategy?.pillars ?? []).map((p) => ({ id: p.id, name: p.name, color: p.color }));
+}
+
+function coverageFor(kind: ActiveInterviewKind, msgs: TranscriptMessage[], state: InterviewState) {
+  return kind === "story" ? storyCoverage(currentThread(msgs, state), state) : positioningCoverage(msgs, state);
+}
+
+function ownedPhotos(profileId: string, ids: string[]): Photo[] {
+  return [...new Set(ids)].map((id) => getPhoto(id)).filter((p): p is Photo => !!p && p.profileId === profileId);
+}
+
+/** Everything the interview page needs, in one object (also returned by GET /api/interviews/[id]). */
+export function loadInterviewView(profile: Profile, id: string): InterviewView {
+  const interview = getOwnedInterview(profile.id, id);
+  const kind = activeKind(interview);
+  const state = getInterviewState(id);
+  const msgs = transcriptOf(id);
+  const coverage = coverageFor(kind, msgs, state);
+  const strategy = getStrategy(profile.id);
+
+  const messages: ViewMessage[] = msgs.map((m) => ({ ...m, stage: m.role === "assistant" ? (state.meta[m.id]?.stage ?? null) : null }));
+  const photos: Record<string, Photo> = {};
+  for (const p of ownedPhotos(profile.id, msgs.flatMap((m) => m.photoIds))) photos[p.id] = p;
+
+  const thread = kind === "story" ? currentThread(msgs, state) : msgs;
+  let pendingPhotoRequestId: string | null = null;
+  if (kind === "story" && interview.status === "active") {
+    const idx = thread.map((m) => m.role === "assistant" && state.meta[m.id]?.stage === "photo").lastIndexOf(true);
+    if (idx >= 0) {
+      const req = thread[idx];
+      const answeredWithPhoto = thread.slice(idx + 1).some((m) => m.role === "user" && m.photoIds.length > 0);
+      if (!answeredWithPhoto && !state.photoLater.includes(req.id)) pendingPhotoRequestId = req.id;
+    }
+  }
+  const last = msgs[msgs.length - 1];
+  const lastAssistant = [...msgs].reverse().find((m) => m.role === "assistant");
+  const lastStage = lastAssistant ? state.meta[lastAssistant.id]?.stage : undefined;
+
+  return {
+    interview,
+    messages,
+    photos,
+    coverage,
+    depth: depthScore(coverage),
+    pendingPhotoRequestId,
+    threadPhotoDone: kind === "story" && (threadHasPhoto(thread) || threadPhotoDeferred(thread, state)),
+    needsReply: interview.status === "active" && (!last || last.role === "user"),
+    readyToFinish: !!lastStage && ["wrap", "closing", "pos-wrap", "pos-followup"].includes(lastStage) && last?.role === "assistant",
+    threadCount: splitThreads(msgs, state.threadStarts).filter((t) => t.some((m) => m.role === "user")).length,
+    pillars: pillarChips(strategy),
+    memories: kind === "story" ? listMemories(profile.id).filter((m) => m.interviewId === id) : [],
+    strategySummary:
+      kind === "positioning" && interview.status === "completed" && strategy
+        ? { positioning: strategy.positioning, goals: strategy.goals.slice(0, 4), pillars: pillarChips(strategy) }
+        : null,
+    language: profile.language,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Creating                                                            */
+/* ------------------------------------------------------------------ */
+
+export function startInterview(profile: Profile, body: z.infer<typeof CreateInterviewBody>): Interview {
+  if (body.kind === "positioning") {
+    const interview = createInterview({ profileId: profile.id, kind: "positioning", title: "Positioning interview", promptSeed: POSITIONING_AREAS[0].question.text });
+    logActivity("interview", "Started the positioning interview", { profileId: profile.id, refId: interview.id });
+    return interview;
+  }
+
+  const strategy = getStrategy(profile.id);
+  const pillars = strategy?.pillars ?? [];
+  const memories = listMemories(profile.id);
+  const validPillar = body.pillar && pillars.some((p) => p.id === body.pillar) ? body.pillar : null;
+  const knownStory = body.knownStory?.trim() || null;
+
+  let pillarId: string | null;
+  let seed: string;
+  if (knownStory) {
+    pillarId = validPillar;
+    seed = knownStory;
+  } else {
+    const plan = planStoryInterview({
+      pillars,
+      memories,
+      previousSeeds: listInterviews(profile.id)
+        .map((i) => i.promptSeed ?? "")
+        .filter(Boolean),
+      pillarId: validPillar,
+      themeId: body.theme ?? null,
+    });
+    pillarId = plan.pillarId;
+    seed = body.seed?.trim() || plan.seed;
+  }
+
+  const pillar = pillars.find((p) => p.id === pillarId);
+  const title = knownStory ? truncate(knownStory, 70) : pillar ? `${pillar.name} story` : "Story interview";
+  const interview = createInterview({ profileId: profile.id, kind: "story", title, pillar: pillarId, promptSeed: seed });
+  // "I already know the story" counts as the first answer; the interviewer picks it up from there.
+  if (knownStory) addMessage(interview.id, "user", knownStory);
+  logActivity("interview", `Started a story interview${pillar ? ` for ${pillar.name}` : ""}`, { profileId: profile.id, refId: interview.id });
+  return interview;
+}
+
+export function deleteInterviewData(interviewId: string) {
+  clearInterviewState(interviewId);
+}
+
+/* ------------------------------------------------------------------ */
+/* Replying (streamed)                                                 */
+/* ------------------------------------------------------------------ */
+
+function buildContext(profile: Profile, interview: Interview, msgs: TranscriptMessage[], state: InterviewState): InterviewContext {
+  const kind = activeKind(interview);
+  const strategy = getStrategy(profile.id);
+  const pillar = strategy?.pillars.find((p) => p.id === interview.pillar) ?? null;
+  const threads = kind === "story" ? splitThreads(msgs, state.threadStarts) : [msgs];
+  const audience = strategy ? [strategy.audience.who, strategy.audience.pains.length ? `They struggle with: ${strategy.audience.pains.slice(0, 3).join(", ")}` : ""].filter(Boolean).join(". ") : "";
+  return {
+    kind,
+    name: profile.name,
+    headline: profile.headline,
+    language: profile.language,
+    positioning: strategy?.positioning ?? "",
+    audience,
+    goals: strategy?.goals ?? [],
+    pillar: pillar ? { name: pillar.name, description: pillar.description } : null,
+    savedTitles:
+      kind === "story"
+        ? listMemories(profile.id, { status: "active" })
+            .filter((m) => m.interviewId !== interview.id && (!interview.pillar || m.pillar === interview.pillar))
+            .slice(0, 10)
+            .map((m) => m.title)
+        : [],
+    avoidTopics: strategy?.avoidTopics ?? [],
+    seed: interview.promptSeed,
+    earlierThreads: threads
+      .slice(0, -1)
+      .map((t) => t.find((m) => m.role === "user")?.content ?? "")
+      .filter(Boolean),
+  };
+}
+
+/**
+ * Store the user's answer (if any), decide the next move and stream the interviewer's
+ * reply. The answer is saved before generation, so a failed or cancelled turn can be
+ * retried by posting an empty answer.
+ */
+export function replyStream(profile: Profile, id: string, body: z.infer<typeof ReplyBody>, signal: AbortSignal): Response {
+  const interview = getOwnedInterview(profile.id, id);
+  if (interview.status !== "active") throw new HttpError(409, "This interview is closed.", "Reopen it from the menu, or start a new interview.");
+  const kind = activeKind(interview);
+
+  let msgs = transcriptOf(id);
+  const content = body.content.trim();
+  const photos = ownedPhotos(profile.id, body.photoIds);
+  if (photos.length !== new Set(body.photoIds).size) throw new HttpError(400, "One of the photos couldn't be found.", "Upload it again.");
+
+  if (content || photos.length || body.intent === "photo-later") {
+    const text = content || (body.intent === "photo-later" ? "No photo right now. I'll add one later." : "");
+    addMessage(id, "user", text, photos.map((p) => p.id));
+    msgs = transcriptOf(id);
+    const updated = msgs;
+    updateInterviewState(id, (s) => applyUserTurn(kind, updated, s, body.intent));
+  } else if (msgs.length > 0 && msgs[msgs.length - 1].role === "assistant") {
+    throw new HttpError(400, "Type an answer first.");
+  }
+
+  const state = getInterviewState(id);
+  const decision = decideNext(kind, msgs, state);
+  const ctx = buildContext(profile, interview, msgs, state);
+  const thread = kind === "story" ? currentThread(msgs, state) : msgs;
+
+  const upstream = new AbortController();
+  const onAbort = () => upstream.abort();
+  signal.addEventListener("abort", onAbort, { once: true });
+
+  const single = isSingleQuestionStage(decision.stage);
+  const source = chatStream({
+    task: "interviewer",
+    system: interviewerSystemPrompt(ctx),
+    messages: interviewerMessages(ctx, thread, decision),
+    maxTokens: 260,
+    signal: upstream.signal,
+  });
+
+  async function* reply(): AsyncGenerator<string> {
+    let text = "";
+    for await (const piece of filterReply(source, { singleQuestion: single, maxChars: single ? 380 : 560 }, () => upstream.abort())) {
+      text += piece;
+      yield piece;
+    }
+    if (decision.stage === "photo" && !mentionsPhoto(text)) {
+      const extra = (text ? " " : "") + photoAskFallback(profile.language);
+      text += extra;
+      yield extra;
+    }
+    if (!text.trim()) throw new LLMError("The model sent back an empty reply.", "Try again, or pick another model for the Interviewer task in Settings → Models.");
+  }
+
+  return streamText(reply(), (full) => {
+    signal.removeEventListener("abort", onAbort);
+    const msg = addMessage(id, "assistant", cleanReply(full, { singleQuestion: false, maxChars: 900 }));
+    recordMeta(id, msg.id, decision);
+  });
+}
+
+function recordMeta(interviewId: string, messageId: string, d: Decision) {
+  updateInterviewState(interviewId, (s) => ({
+    ...s,
+    meta: { ...s.meta, [messageId]: { stage: d.stage, ...(d.target ? { target: d.target } : {}), ...(d.probe ? { probeId: d.probe.id } : {}), ...(d.generic ? { generic: true } : {}) } },
+  }));
+}
+
+/**
+ * Model-based coverage check, run after a reply every few answers. It catches what the
+ * keyword heuristics miss (other languages, paraphrases) so the interviewer doesn't ask
+ * for things the user already told. Failures are ignored: heuristics still work.
+ */
+export async function refreshCoverage(interviewId: string): Promise<void> {
+  const interview = getInterview(interviewId);
+  if (!interview || interview.status !== "active") return;
+  const kind = activeKind(interview);
+  const state = getInterviewState(interviewId);
+  const msgs = transcriptOf(interviewId);
+  const thread = kind === "story" ? currentThread(msgs, state) : msgs;
+  const users = thread.filter((m) => m.role === "user");
+  if (users.length < 2) return;
+  const threadStart = users[0].id;
+  if (state.llm && state.llm.threadStart === threadStart && users.length - state.llm.userTurns < 3) return;
+  const heuristic = coverageFor(kind, msgs, { ...state, llm: null });
+  if (!heuristic.some((i) => i.status === "missing" && i.key !== "photo")) return;
+
+  const name = getProfile(interview.profileId)?.name ?? "the user";
+  const prompt = coverageCheckPrompt(kind, name, formatTranscript(thread, name, 12000));
+  const opts = { task: "extractor" as const, system: prompt.system, messages: [{ role: "user" as const, content: prompt.user }], temperature: 0, maxTokens: 300 };
+  try {
+    const result: Record<string, boolean> = kind === "story" ? await chatJson(StoryCoverageCheckSchema, opts) : await chatJson(PositioningCoverageCheckSchema, opts);
+    const covered = Object.entries(result)
+      .filter(([, v]) => v === true)
+      .map(([k]) => k);
+    updateInterviewState(interviewId, (s) => ({ ...s, llm: { threadStart, covered, userTurns: users.length } }));
+  } catch (err) {
+    console.warn(`[interview] coverage check skipped: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Finishing                                                           */
+/* ------------------------------------------------------------------ */
+
+export type FinishResult = { interview: Interview; memories: Memory[]; strategy: Strategy | null };
+
+const finishing = new Set<string>();
+
+export async function finishInterview(profile: Profile, id: string, body: z.infer<typeof FinishBody>): Promise<FinishResult> {
+  const interview = getOwnedInterview(profile.id, id);
+  if (interview.status === "completed") {
+    return { interview, memories: listMemories(profile.id).filter((m) => m.interviewId === id), strategy: getStrategy(profile.id) };
+  }
+  if (finishing.has(id)) throw new HttpError(409, "Already saving this interview.", "Give it a moment — local models can take a minute.");
+  finishing.add(id);
+  try {
+    const msgs = transcriptOf(id);
+    const userWords = msgs.filter((m) => m.role === "user").reduce((n, m) => n + wordCount(m.content), 0);
+    if (userWords < 15) {
+      throw new HttpError(400, "There isn't enough here to save yet.", "Answer a few more questions first, or end the interview without saving.");
+    }
+    return activeKind(interview) === "positioning" ? await finishPositioning(profile, interview, msgs) : await finishStory(profile, interview, msgs, body.photoIds);
+  } finally {
+    finishing.delete(id);
+  }
+}
+
+async function finishPositioning(profile: Profile, interview: Interview, msgs: TranscriptMessage[]): Promise<FinishResult> {
+  const prompt = positioningPrompt({ name: profile.name, headline: profile.headline, language: profile.language, transcript: formatTranscript(msgs, profile.name) });
+  const extract = await chatJson(PositioningExtractSchema, {
+    task: "extractor",
+    system: prompt.system,
+    messages: [{ role: "user", content: prompt.user }],
+    maxTokens: 3000,
+  });
+  if (extract.pillars.filter((p) => p.name.trim()).length < 2) {
+    // Small models sometimes skip the nested pillar list; ask for it on its own.
+    try {
+      const p = pillarsPrompt({ name: profile.name, language: profile.language, summary: extractSummary(extract) || formatTranscript(msgs, profile.name, 8000) });
+      const res = await chatJson(PillarsOnlySchema, { task: "extractor", system: p.system, messages: [{ role: "user", content: p.user }], maxTokens: 1500 });
+      if (res.pillars.length) extract.pillars = res.pillars;
+    } catch (err) {
+      console.warn(`[interview] pillar retry failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  const existing = getStrategy(profile.id);
+  const strategy = mergeStrategy(existing, extract, { language: profile.language });
+  saveStrategy(profile.id, strategy);
+  const updated = updateInterview(interview.id, { status: "completed", title: "Positioning interview", summary: strategy.positioning || "Strategy drafted from the interview." });
+  logActivity("strategy", existing ? "Strategy updated from the positioning interview" : "Strategy drafted from the positioning interview", {
+    profileId: profile.id,
+    refId: interview.id,
+  });
+  return { interview: updated, memories: [], strategy };
+}
+
+async function finishStory(profile: Profile, interview: Interview, msgs: TranscriptMessage[], extraPhotoIds: string[]): Promise<FinishResult> {
+  const state = getInterviewState(interview.id);
+  const strategy = getStrategy(profile.id);
+  const pillars = strategy?.pillars ?? [];
+  const schema = storyCardSchema(pillars.map((p) => p.name));
+
+  const userWords = (t: TranscriptMessage[]) => t.filter((m) => m.role === "user").reduce((n, m) => n + wordCount(m.content), 0);
+  let threads = splitThreads(msgs, state.threadStarts).filter((t) => userWords(t) >= 12);
+  if (threads.length === 0) threads = [msgs];
+  threads = threads.slice(-3);
+
+  const extraPhotos = ownedPhotos(profile.id, extraPhotoIds).map((p) => p.id);
+  const cards: { memory: ReturnType<typeof cardToMemory>; photoIds: string[] }[] = [];
+  for (const [i, thread] of threads.entries()) {
+    const prompt = storyCardPrompt({
+      name: profile.name,
+      headline: profile.headline,
+      language: profile.language,
+      pillars: pillars.map((p) => ({ name: p.name, description: p.description })),
+      transcript: formatTranscript(thread, profile.name, 16000),
+    });
+    const card = await chatJson(schema, { task: "extractor", system: prompt.system, messages: [{ role: "user", content: prompt.user }], maxTokens: 2500 });
+    const users = thread.filter((m) => m.role === "user");
+    const memory = cardToMemory(card, {
+      userTexts: users.map((m) => m.content),
+      pillars,
+      presetPillarId: interview.pillar,
+      coverageStrength: strengthFromCoverage(storyCoverage(thread, state)),
+    });
+    const photoIds = [...new Set([...users.flatMap((m) => m.photoIds), ...(i === threads.length - 1 ? extraPhotos : [])])];
+    cards.push({ memory, photoIds });
+  }
+
+  const vectors = await embed(cards.map((c) => memoryEmbeddingText(c.memory)));
+  const memories: Memory[] = cards.map((c, i) => {
+    const created = createMemory(profile.id, c.memory, { interviewId: interview.id, embedding: vectors?.[i] ?? null });
+    for (const p of ownedPhotos(profile.id, c.photoIds)) updatePhoto(p.id, { memoryId: created.id });
+    // Thin stories stay in the bank as drafts so the planner doesn't build posts on them.
+    if (c.memory.strength <= 2) updateMemory(created.id, { status: "raw" });
+    return getMemory(created.id)!;
+  });
+
+  const titles = memories.map((m) => m.title);
+  const updated = updateInterview(interview.id, {
+    status: "completed",
+    title: titles.length > 1 ? `${titles[0]} (+${titles.length - 1} more)` : titles[0],
+    summary: titles.length > 1 ? `Saved ${titles.length} stories: ${titles.join("; ")}` : `Saved: ${titles[0]}`,
+  });
+  return { interview: updated, memories, strategy: null };
+}
