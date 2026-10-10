@@ -305,11 +305,6 @@ export function getMemoryEmbedding(id: string): number[] | null {
   return r?.embedding ? parseJson<number[] | null>(r.embedding, null) : null;
 }
 
-export function listMemoryEmbeddings(profileId: string): { id: string; embedding: number[] }[] {
-  const rows = getDb().prepare(`SELECT id, embedding FROM memories WHERE profile_id = ? AND embedding IS NOT NULL AND status != 'archived'`).all(profileId) as { id: string; embedding: string }[];
-  return rows.map((r) => ({ id: r.id, embedding: parseJson<number[]>(r.embedding, []) })).filter((r) => r.embedding.length > 0);
-}
-
 export function createMemory(profileId: string, m: ExtractedMemory, opts: { interviewId?: string | null; embedding?: number[] | null } = {}): Memory {
   const id = newId("mem");
   getDb()

@@ -69,6 +69,7 @@ src/
     interview/        interview prompts, engine, extraction
     photos.ts         upload processing, vision captions
     memory.ts         semantic search over the memory bank
+    strategy.ts       strategy normalization (every writer runs it before saveStrategy) + editor model
     voice/            import parsers, stylometry, style-guide analysis, example retrieval
     factory/          AI-tell linter, post structures, generation pipeline
     calendar/         cadence slots, auto-planner, ICS export

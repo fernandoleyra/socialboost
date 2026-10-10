@@ -29,6 +29,8 @@ export class ImportFormatError extends Error {
   constructor(
     message: string,
     public readonly hint?: string,
+    /** "format": it couldn't be read as posts. "content": it was read, but holds nothing in the person's own words (only reposts). */
+    public readonly problem: "format" | "content" = "format",
   ) {
     super(message);
     this.name = "ImportFormatError";
@@ -58,11 +60,12 @@ export function parseCount(value: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-/** Dates as LinkedIn exports write them ("2025-01-03 10:00:00 UTC", "2024-05-12 08:15:31"), epoch milliseconds, or anything Date can read. */
+/** Dates as LinkedIn exports write them ("2025-01-03 10:00:00 UTC", "2024-05-12 08:15:31"), epoch milliseconds or seconds, or anything Date can read. */
 export function parseExportDate(value: unknown): string | null {
   if (typeof value !== "string" || !value.trim()) return null;
   const v = value.trim();
   if (/^\d{12,13}$/.test(v)) return new Date(Number(v)).toISOString();
+  if (/^\d{9,10}$/.test(v)) return new Date(Number(v) * 1000).toISOString();
   // "2025-01-03 10:00:00 UTC" has no ISO "T" and no offset; it's UTC. Anything with a T/offset goes to Date.
   const m = v.match(/^(\d{4})-(\d{2})-(\d{2})(?: (\d{2}):(\d{2})(?::(\d{2}))?)?(?:\s*UTC)?$/i);
   if (m) {
@@ -273,7 +276,7 @@ function shareRowToPost(cell: (role: ShareRole) => string): ParsedPost | null {
 }
 
 function finishShares(posts: ParsedPost[], skipped: number, allReposts: string): ParseResult {
-  if (posts.length === 0 && skipped > 0) throw new ImportFormatError(allReposts, "Write a few posts of your own first, or paste posts you wrote elsewhere.");
+  if (posts.length === 0 && skipped > 0) throw new ImportFormatError(allReposts, "Write a few posts of your own first, or paste posts you wrote elsewhere.", "content");
   return finish(posts, skipped);
 }
 

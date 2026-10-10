@@ -8,6 +8,8 @@ import { ProfileSection } from "@/components/settings/profile-section";
 import { ModelsSection } from "@/components/settings/models-section";
 import { DataSection, PublishingSection } from "@/components/settings/data-section";
 import { AppearanceSection } from "@/components/settings/appearance-section";
+import { AccessSection } from "@/components/settings/access-section";
+import { authEnabled } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Settings — SocialBoost" };
@@ -24,13 +26,14 @@ export default function SettingsPage() {
   const profile = getActiveProfile();
   if (!profile) redirect("/welcome");
   const others = listProfiles().filter((p) => p.id !== profile.id).length;
+  const gated = authEnabled();
 
   return (
     <div className="mx-auto max-w-3xl space-y-10">
       <PageHeader eyebrow="Settings" title="Settings" subtitle="Your profile, the models that do the work, publishing and backups." />
 
       <nav aria-label="Settings sections" className="-mt-6 flex gap-1.5 overflow-x-auto pb-1">
-        {JUMP.map((j) => (
+        {(gated ? [...JUMP, { href: "#access", label: "Access" }] : JUMP).map((j) => (
           <a key={j.href} href={j.href} className="chip shrink-0 transition-colors hover:bg-fill-2! focus-ring">
             {j.label}
           </a>
@@ -47,6 +50,7 @@ export default function SettingsPage() {
       <PublishingSection />
       <DataSection profileName={profile.name} dataDir={DATA_DIR} />
       <AppearanceSection />
+      {gated && <AccessSection />}
     </div>
   );
 }
