@@ -21,6 +21,16 @@ and have a human pass before anything goes out. SocialBoost runs that whole proc
  Insights (what each post did) → pillar weights and hook patterns feed the next plan
 ```
 
+## Screens
+
+| Today | Story interview | Studio editor |
+|---|---|---|
+| ![Today](docs/screenshots/today.jpg) | ![Interview](docs/screenshots/interview.jpg) | ![Studio](docs/screenshots/studio-editor.jpg) |
+| **Memory Bank** | **Voice** | **Calendar (dark)** |
+| ![Memory Bank](docs/screenshots/memory-bank.jpg) | ![Voice](docs/screenshots/voice.jpg) | ![Calendar](docs/screenshots/calendar.jpg) |
+
+<sub>Captured from a test run on a local 4B model with a fictional story; your own data stays on your machine.</sub>
+
 ## What's inside
 
 - **Interviews** — a positioning interview that turns into your strategy, then short story-mining interviews targeted

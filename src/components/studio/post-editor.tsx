@@ -457,7 +457,7 @@ export function PostEditor(props: EditorProps) {
   /** A post that already has a future date on the calendar is queued for it on approval (PATCH /api/posts/[id]). */
   const approveNow = async () => {
     const p = await patch({ status: "approved" });
-    if (p) toast(p.status === "scheduled" && p.scheduledAt ? `Approved and queued for ${formatWhen(p.scheduledAt)}` : "Approved. Schedule it when you're ready.");
+    if (p) toast(p.status === "scheduled" && p.scheduledAt ? `Approved and queued for ${formatWhen(p.scheduledAt, { timeZone: props.timezone })}` : "Approved. Schedule it when you're ready.");
     return p;
   };
 
@@ -467,7 +467,7 @@ export function PostEditor(props: EditorProps) {
   };
 
   const schedule = async (iso: string) => {
-    const p = await setStatus("scheduled", { scheduledAt: iso }, `Scheduled for ${formatWhen(iso)}`);
+    const p = await setStatus("scheduled", { scheduledAt: iso }, `Scheduled for ${formatWhen(iso, { timeZone: props.timezone })}`);
     if (p) setSheet(null);
   };
 
@@ -661,10 +661,10 @@ export function PostEditor(props: EditorProps) {
               <Chip tone={post.status === "scheduled" ? "indigo" : "gray"}>
                 <CalendarClock className="size-3" />
                 {post.status === "scheduled" ? (
-                  <When iso={post.scheduledAt} />
+                  <When iso={post.scheduledAt} timeZone={props.timezone} />
                 ) : (
                   <>
-                    Planned <When iso={post.scheduledAt} withTime={false} />
+                    Planned <When iso={post.scheduledAt} withTime={false} timeZone={props.timezone} />
                   </>
                 )}
               </Chip>
@@ -740,7 +740,7 @@ export function PostEditor(props: EditorProps) {
             <CalendarClock className="mt-0.5 size-5 shrink-0" style={{ color: "var(--sys-orange)" }} />
             <div>
               <div className="t-headline">Due now</div>
-              <p className="t-footnote text-label-2">It was planned for <When iso={post.scheduledAt} />. Copy it to LinkedIn with the photo, then mark it as posted so Insights can track it.</p>
+              <p className="t-footnote text-label-2">It was planned for <When iso={post.scheduledAt} timeZone={props.timezone} />. Copy it to LinkedIn with the photo, then mark it as posted so Insights can track it.</p>
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -761,7 +761,7 @@ export function PostEditor(props: EditorProps) {
             <div>
               <div className="t-headline">
                 Published{post.publishedAt ? " " : ""}
-                <When iso={post.publishedAt} />
+                <When iso={post.publishedAt} timeZone={props.timezone} />
               </div>
               <p className="t-footnote text-label-2">
                 {post.reactions !== null || post.comments !== null

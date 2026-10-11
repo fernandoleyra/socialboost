@@ -334,12 +334,6 @@
     z-index: 1;
   }
 
-  /* Lensing: Chromium supports SVG filters in backdrop-filter → real refraction on edges. */
-  @supports (backdrop-filter: url(#lg-lens)) {
-    .glass-lens {
-      backdrop-filter: url(#lg-lens) blur(var(--glass-blur)) saturate(var(--glass-saturate)) brightness(var(--glass-brightness));
-    }
-  }
 
   /* Content-layer card (Apple keeps content mostly opaque; a light frosted card reads best). */
   .card {

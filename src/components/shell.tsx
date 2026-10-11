@@ -244,7 +244,7 @@ export function Shell({ profiles, activeId, children }: { profiles: ShellProfile
   return (
     <div className="min-h-screen lg:pl-[284px]">
       {/* Floating glass sidebar */}
-      <aside className="glass glass-lens fixed inset-y-3 left-3 z-30 hidden w-[264px] flex-col rounded-window p-3 lg:flex">
+      <aside className="glass fixed inset-y-3 left-3 z-30 hidden w-[264px] flex-col rounded-window p-3 lg:flex">
         <div className="flex items-center gap-2 px-2 pt-1 pb-3">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/icon.svg" alt="" className="size-7 rounded-[8px]" />
@@ -291,7 +291,7 @@ export function Shell({ profiles, activeId, children }: { profiles: ShellProfile
       <main className="mx-auto w-full max-w-[1240px] px-4 pb-32 pt-4 sm:px-6 lg:px-10 lg:pt-10 lg:pb-16">{children}</main>
 
       {/* Mobile floating tab bar */}
-      <nav aria-label="Main" className="glass glass-lens fixed inset-x-3 bottom-3 z-30 flex items-center gap-0.5 rounded-full px-1.5 py-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))] lg:hidden">
+      <nav aria-label="Main" className="glass-strong fixed inset-x-3 bottom-3 z-30 flex items-center gap-0.5 rounded-full px-1.5 py-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))] lg:hidden">
         {NAV.filter((n) => MOBILE_NAV.includes(n.href)).map(({ href, label, icon: Icon }) => {
           const active = isActive(pathname, href);
           return (

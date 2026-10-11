@@ -88,25 +88,31 @@ export function useHydrated(): boolean {
   );
 }
 
-export function formatWhen(iso: string | null | undefined, opts: { withTime?: boolean } = {}): string {
+/** Schedules are shown in the profile's time zone (as on the Calendar) when one is given. */
+export function formatWhen(iso: string | null | undefined, opts: { withTime?: boolean; timeZone?: string } = {}): string {
   const d = parseDbDate(iso);
   if (!d) return "";
-  return d.toLocaleString(undefined, {
+  const base: Intl.DateTimeFormatOptions = {
     weekday: "short",
     month: "short",
     day: "numeric",
     ...(opts.withTime === false ? {} : { hour: "2-digit", minute: "2-digit" }),
-  });
+  };
+  try {
+    return d.toLocaleString(undefined, opts.timeZone ? { ...base, timeZone: opts.timeZone } : base);
+  } catch {
+    return d.toLocaleString(undefined, base); // unknown zone name
+  }
 }
 
 /** A date in the viewer's locale and time zone, rendered after hydration. */
-export function When({ iso, withTime, relative }: { iso: string | null | undefined; withTime?: boolean; relative?: boolean }) {
+export function When({ iso, withTime, relative, timeZone }: { iso: string | null | undefined; withTime?: boolean; relative?: boolean; timeZone?: string }) {
   const hydrated = useHydrated();
   const d = parseDbDate(iso);
   if (!d) return null;
   return (
     <time dateTime={d.toISOString()}>
-      {hydrated ? (relative ? relativeTime(d.toISOString()) : formatWhen(d.toISOString(), { withTime })) : ""}
+      {hydrated ? (relative ? relativeTime(d.toISOString()) : formatWhen(d.toISOString(), { withTime, timeZone })) : ""}
     </time>
   );
 }
