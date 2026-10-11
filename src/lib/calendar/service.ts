@@ -1,5 +1,5 @@
 import "server-only";
-import { authEnabled, icsKey as gateIcsKey, safeEqual } from "@/lib/auth";
+import { safeEqual } from "@/lib/auth";
 import { getDb, logActivity } from "@/lib/db";
 import { HttpError } from "@/lib/http";
 import { getSetting, setSetting } from "@/lib/settings";
@@ -298,12 +298,10 @@ export function verifyIcsToken(profileId: string, token: string | null): boolean
 
 /**
  * Feed path for calendar apps, which can't send the session cookie. `token` is the profile's own
- * secret. With the password gate on (SOCIALBOOST_PASSWORD), `key` carries the gate's read-only
- * feed key so src/proxy.ts lets the request through to this route.
+ * random secret; src/proxy.ts lets feed GETs through the password gate and the route checks it.
  */
 export function icsPath(profileId: string, rotate = false): string {
   const q = new URLSearchParams({ profile: profileId, token: icsToken(profileId, rotate) });
-  if (authEnabled()) q.set("key", gateIcsKey());
   return `/api/calendar/ics?${q.toString()}`;
 }
 

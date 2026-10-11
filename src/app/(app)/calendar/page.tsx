@@ -15,5 +15,5 @@ export default function CalendarPage() {
   const now = new Date();
   const today = dayKeyOf(now, safeTimezone(profile.timezone));
   const initial = getCalendarData(profile, viewRange("month", today), now);
-  return <CalendarBoard initial={initial} initialView="month" profile={{ name: profile.name, headline: profile.headline }} />;
+  return <CalendarBoard key={profile.id} initial={initial} initialView="month" profile={{ name: profile.name, headline: profile.headline }} />;
 }

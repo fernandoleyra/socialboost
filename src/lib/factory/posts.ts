@@ -1,6 +1,7 @@
 import "server-only";
 import { logActivity } from "@/lib/db";
 import { HttpError } from "@/lib/http";
+import { STALE_PUBLISH_MS, publishingSince } from "@/lib/calendar/linkedin-format";
 import { createPost, getMemory, getPhoto, getPost, getStrategy, listPhotos, listPosts, updatePost } from "@/lib/repo";
 import type { Memory, Photo, Post, PostStatus } from "@/lib/types";
 import { hookOf, parseAngleField } from "./angles";
@@ -59,6 +60,15 @@ export function createBlankPost(profileId: string, input: { body: string; pillar
   if (body) post = applyHumanEdit(post, body);
   logActivity("post", `New post: ${postLabel(post)}`, { profileId, refId: post.id });
   return post;
+}
+
+/**
+ * No text, status or delete changes while the scheduler or "Publish now" is sending this post: the
+ * stored body must stay the text that went out, and the post must still exist to record the result.
+ */
+export function assertNotPublishing(post: Post, hint = "Wait a moment, then refresh the page."): void {
+  const since = publishingSince(post.error);
+  if (since && Date.now() - since.getTime() < STALE_PUBLISH_MS) throw new HttpError(409, "This post is being published right now.", hint);
 }
 
 /** Save a hand edit: version it (coalesced), re-lint, keep the critique (marked stale). */

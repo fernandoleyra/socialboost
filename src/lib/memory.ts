@@ -3,7 +3,7 @@ import { z } from "zod";
 import { getDb, logActivity, parseJson } from "./db";
 import { HttpError } from "./http";
 import { LLMError, chatJson, cosine, embed } from "./llm";
-import { createMemory, getMemory, getStrategy, getProfile, listMemories, listPosts, memoryEmbeddingText, updateMemory, updatePhoto, getPhoto } from "./repo";
+import { createMemory, deleteMemory, getMemory, getStrategy, getProfile, listMemories, listPosts, memoryEmbeddingText, updateMemory, updatePhoto, getPhoto } from "./repo";
 import type { Memory, Pillar, Post } from "./types";
 import { parseAngleField } from "./factory/angles";
 import {
@@ -170,7 +170,10 @@ export function requireOwnedMemory(profileId: string, id: string): Memory {
   return m;
 }
 
-export type MemoryPostRef = Pick<Post, "id" | "status" | "scheduledAt" | "publishedAt" | "linkedinUrl" | "updatedAt"> & { hook: string };
+/** `placeholder`: an Auto-plan slot with no text yet; it goes away with the story. */
+export type MemoryPostRef = Pick<Post, "id" | "status" | "scheduledAt" | "publishedAt" | "linkedinUrl" | "updatedAt"> & { hook: string; placeholder: boolean };
+
+const isPlaceholder = (p: Pick<Post, "status" | "body">) => p.status === "idea" && !p.body.trim();
 
 export function memoryPosts(profileId: string, memoryId: string): MemoryPostRef[] {
   return listPosts(profileId, { memoryId }).map((p) => ({
@@ -182,7 +185,22 @@ export function memoryPosts(profileId: string, memoryId: string): MemoryPostRef[
     updatedAt: p.updatedAt,
     // Planned ideas have no text yet: show the hook of the angle chosen in the Studio (posts.angle JSON).
     hook: p.body.split("\n").map((l) => l.trim()).find(Boolean) || parseAngleField(p.angle).selected?.hook || "",
+    placeholder: isPlaceholder(p),
   }));
+}
+
+/**
+ * Delete a story. Posts written from it keep their text; planned ideas with no text yet are removed
+ * with it, since nothing could draft them any more and they'd block their calendar slot. Returns how
+ * many planned slots were freed.
+ */
+export function deleteMemoryAndPlaceholders(profileId: string, memoryId: string): number {
+  const db = getDb();
+  return db.transaction(() => {
+    const freed = db.prepare(`DELETE FROM posts WHERE memory_id = ? AND profile_id = ? AND status = 'idea' AND trim(body) = ''`).run(memoryId, profileId).changes;
+    deleteMemory(memoryId);
+    return freed;
+  })();
 }
 
 /* ------------------------------------------------------------------ */

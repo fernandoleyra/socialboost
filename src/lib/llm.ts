@@ -74,6 +74,9 @@ async function httpError(res: Response, provider: ProviderConfig): Promise<LLMEr
     /* ignore */
   }
   const short = body.slice(0, 400);
+  if (res.status === 400 && /exceed_context_size|exceeds the available context size/i.test(body)) {
+    return new LLMError("The prompt is longer than this model's context window.", "Raise the context window in Settings → Models (8K or more), or use a model with a longer context.");
+  }
   if (res.status === 404 && provider.kind === "ollama" && /model/i.test(body)) {
     return new LLMError(`Ollama doesn't have that model yet. ${short}`, "Run `ollama pull <model>` or choose another model in Settings.");
   }
@@ -81,6 +84,11 @@ async function httpError(res: Response, provider: ProviderConfig): Promise<LLMEr
     return new LLMError(`${provider.label} rejected the API key (${res.status}).`, "Check the API key in Settings → Models.");
   }
   return new LLMError(`${provider.label} returned ${res.status}: ${short}`);
+}
+
+/** The answer hit the output limit: the text stops mid-way, so it must never be saved as complete. */
+function truncatedError(): LLMError {
+  return new LLMError("The model ran out of room before finishing its answer.", "Try again, or pick another model for this task in Settings → Models.");
 }
 
 function networkError(err: unknown, provider: ProviderConfig): LLMError {
@@ -131,6 +139,9 @@ async function ollamaChat(
     stream: extra.stream,
     think: false,
     keep_alive: "15m",
+    // Ollama silently drops the oldest messages when a prompt overflows num_ctx: for the writer that is
+    // the notes turn, the only facts it may use. Fail visibly instead.
+    ...(opts.task === "writer" || opts.task === "critic" ? { truncate: false } : {}),
     options: {
       num_ctx: extra.numCtx,
       ...familySampling(model, opts.task, Boolean(extra.format)),
@@ -199,31 +210,58 @@ async function* readSse(res: Response): AsyncGenerator<string> {
   }
 }
 
-/** Concatenate a streamed Ollama /api/chat response (used so long calls never wait silently). */
-async function collectOllama(res: Response): Promise<string> {
+/**
+ * Concatenate a streamed Ollama /api/chat response (used so long calls never wait silently).
+ * `prose`: a reply cut at num_predict is an error. Structured calls leave that to the JSON parser,
+ * since grammar-constrained output can hit the limit on trailing whitespace after complete JSON.
+ */
+async function collectOllama(res: Response, prose: boolean): Promise<string> {
   let out = "";
   for await (const chunk of readNdjson(res)) {
     if (chunk.error) throw new LLMError(String(chunk.error));
     out += (chunk.message as { content?: string } | undefined)?.content ?? "";
+    if (prose && chunk.done_reason === "length") throw truncatedError();
   }
   return out;
 }
 
+type OpenAIChunk = { error?: unknown; choices?: { finish_reason?: string | null; delta?: { content?: string }; message?: { content?: string } }[] };
+
+/** Failures and cut-offs reported inside an OpenAI-compatible response (OpenRouter sends mid-stream errors this way). */
+function checkOpenAIChunk(json: OpenAIChunk, prose: boolean) {
+  if (json.error) {
+    const e = json.error as { message?: unknown };
+    throw new LLMError(`The model stopped with an error: ${String(typeof e === "object" && e && e.message ? e.message : json.error)}`);
+  }
+  const reason = json.choices?.[0]?.finish_reason;
+  if (reason === "error") throw new LLMError("The model stopped with an error.");
+  if (prose && reason === "length") throw truncatedError();
+}
+
+/** Parsed `data:` events of an OpenAI-compatible stream; keep-alive and partial lines are skipped. */
+async function* readOpenAIChunks(res: Response, prose: boolean): AsyncGenerator<OpenAIChunk> {
+  for await (const data of readSse(res)) {
+    if (data === "[DONE]") break;
+    let json: OpenAIChunk;
+    try {
+      json = JSON.parse(data);
+    } catch {
+      continue;
+    }
+    checkOpenAIChunk(json, prose);
+    yield json;
+  }
+}
+
 /** Concatenate a streamed OpenAI-compatible response. Falls back to a plain JSON body. */
-async function collectOpenAI(res: Response): Promise<string> {
+async function collectOpenAI(res: Response, prose: boolean): Promise<string> {
   if (!(res.headers.get("content-type") ?? "").includes("event-stream")) {
-    const json = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+    const json = (await res.json()) as OpenAIChunk;
+    checkOpenAIChunk(json, prose);
     return json.choices?.[0]?.message?.content ?? "";
   }
   let out = "";
-  for await (const data of readSse(res)) {
-    if (data === "[DONE]") break;
-    try {
-      out += JSON.parse(data).choices?.[0]?.delta?.content ?? "";
-    } catch {
-      /* keep-alive */
-    }
-  }
+  for await (const json of readOpenAIChunks(res, prose)) out += json.choices?.[0]?.delta?.content ?? "";
   return out;
 }
 
@@ -250,28 +288,32 @@ function openaiMessages(opts: ChatOptions) {
   return msgs;
 }
 
+/**
+ * What each OpenAI-compatible model turned out to reject. Reasoning models (OpenAI's gpt-5 family and
+ * o-series) refuse `max_tokens` ("use max_completion_tokens") and any non-default temperature.
+ */
+const openaiQuirks = new Map<string, { completionTokens: boolean; noTemperature: boolean }>();
+
 async function openaiChat(
   provider: ProviderConfig,
   model: string,
   opts: ChatOptions,
   extra: { stream: boolean; jsonSchema?: Record<string, unknown>; temperature?: number },
 ): Promise<Response> {
-  const base: Record<string, unknown> = {
+  const quirkKey = `${provider.baseUrl}|${model}`;
+  const quirks = { completionTokens: false, noTemperature: false, ...openaiQuirks.get(quirkKey) };
+  const base = (): Record<string, unknown> => ({
     model,
     messages: openaiMessages(opts),
     stream: extra.stream,
-    ...(extra.temperature !== undefined ? { temperature: extra.temperature } : {}),
-    ...(opts.maxTokens ? { max_tokens: opts.maxTokens } : {}),
-  };
-  const attempts: Record<string, unknown>[] = extra.jsonSchema
-    ? [
-        { ...base, response_format: { type: "json_schema", json_schema: { name: "output", schema: extra.jsonSchema, strict: false } } },
-        { ...base, response_format: { type: "json_object" } },
-        base,
-      ]
-    : [base];
+    ...(extra.temperature !== undefined && !quirks.noTemperature ? { temperature: extra.temperature } : {}),
+    ...(opts.maxTokens ? (quirks.completionTokens ? { max_completion_tokens: opts.maxTokens } : { max_tokens: opts.maxTokens }) : {}),
+  });
+  const formats: (Record<string, unknown> | null)[] = extra.jsonSchema
+    ? [{ type: "json_schema", json_schema: { name: "output", schema: extra.jsonSchema, strict: false } }, { type: "json_object" }, null]
+    : [null];
   let last: Response | null = null;
-  for (const body of attempts) {
+  for (let i = 0; i < formats.length; ) {
     try {
       last = await modelFetch(`${trimSlash(provider.baseUrl)}/chat/completions`, {
         method: "POST",
@@ -279,14 +321,23 @@ async function openaiChat(
           "content-type": "application/json",
           ...(provider.apiKey ? { authorization: `Bearer ${provider.apiKey}` } : {}),
         },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ ...base(), ...(formats[i] ? { response_format: formats[i] } : {}) }),
         signal: opts.signal,
       });
     } catch (err) {
       throw networkError(err, provider);
     }
-    // Some servers reject response_format; fall through to the next, more permissive attempt.
     if (last.ok || (last.status !== 400 && last.status !== 422)) break;
+    // A parameter this model doesn't take: retry the same attempt without it, and remember.
+    const text = await last.clone().text().catch(() => "");
+    if (opts.maxTokens && !quirks.completionTokens && /max_completion_tokens/.test(text)) quirks.completionTokens = true;
+    else if (extra.temperature !== undefined && !quirks.noTemperature && /temperature/i.test(text) && /unsupported|not supported|only the default/i.test(text)) quirks.noTemperature = true;
+    // Some servers reject response_format; fall through to the next, more permissive attempt.
+    else {
+      i++;
+      continue;
+    }
+    openaiQuirks.set(quirkKey, { ...quirks });
   }
   if (!last!.ok) throw await httpError(last!, provider);
   return last!;
@@ -301,8 +352,15 @@ function anthropicClient(provider: ProviderConfig) {
   return new Anthropic({ apiKey: provider.apiKey || undefined, ...(isDefault ? {} : { baseURL: trimSlash(provider.baseUrl) }) });
 }
 
-/** Current-generation Claude models take `effort` and reject sampling params. */
+/** Claude 5 models think by default (Opus 5.5 always), and max_tokens covers thinking plus the answer. */
 const isClaude5 = (model: string) => /^claude-(fable|opus|sonnet|haiku|mythos)-5/.test(model);
+/** Models that take `effort` and reject sampling params (temperature/top_p/top_k): Claude 5 and Opus 4.7/4.8. */
+const noSampling = (model: string) => /^claude-(?:(?:fable|opus|sonnet|haiku|mythos)-5|opus-4-[78])/.test(model);
+/**
+ * Callers size max_tokens for local models with thinking off. A model that thinks first needs room
+ * for that too, so their budget becomes a floor; length stays controlled by the prompt.
+ */
+const anthropicMaxTokens = (model: string, requested: number | undefined, fallback: number) => (isClaude5(model) ? Math.max(requested ?? 0, fallback) : (requested ?? fallback));
 /** Models that accept the server-side refusal fallback ("default" routing). */
 const supportsFallbacks = (model: string) => /^claude-(fable-5-1|opus-5-5|opus-5$|sonnet-5-5)/.test(model);
 
@@ -327,10 +385,10 @@ function anthropicParams(provider: ProviderConfig, model: string, opts: ChatOpti
   const fallback = isDefaultHost && supportsFallbacks(model);
   return {
     model,
-    max_tokens: opts.maxTokens ?? 16000,
+    max_tokens: anthropicMaxTokens(model, opts.maxTokens, 16000),
     ...(systemParts.length ? { system: systemParts.join("\n\n") } : {}),
     messages,
-    ...(isClaude5(model)
+    ...(noSampling(model)
       ? { output_config: { effort, ...(jsonSchema ? { format: { type: "json_schema" as const, schema: jsonSchema } } : {}) } }
       : {
           ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
@@ -341,12 +399,18 @@ function anthropicParams(provider: ProviderConfig, model: string, opts: ChatOpti
 }
 
 function anthropicError(err: unknown): LLMError {
+  if (err instanceof Anthropic.APIUserAbortError) return new LLMError("Request cancelled.");
   if (err instanceof Anthropic.AuthenticationError) return new LLMError("Anthropic rejected the API key.", "Check the key in Settings → Models.");
   if (err instanceof Anthropic.RateLimitError) return new LLMError("Anthropic rate limit hit — try again in a moment.");
   if (err instanceof Anthropic.BadRequestError) return new LLMError(`Anthropic rejected the request: ${err.message}`);
   if (err instanceof Anthropic.APIConnectionError) return new LLMError("Couldn't reach the Anthropic API.", "Check your network connection.");
   if (err instanceof Anthropic.APIError) return new LLMError(`Anthropic API error ${err.status}: ${err.message}`);
   return new LLMError(err instanceof Error ? err.message : String(err));
+}
+
+function checkAnthropicStop(reason: string | null | undefined) {
+  if (reason === "refusal") throw new LLMError("The model declined this request.");
+  if (reason === "max_tokens" || reason === "model_context_window_exceeded") throw truncatedError();
 }
 
 /** Anthropic structured outputs accept a JSON-Schema subset: drop numeric/length bounds, close objects. */
@@ -379,6 +443,7 @@ export async function* chatStream(opts: ChatOptions): AsyncGenerator<string> {
     let inThink = false;
     for await (const chunk of readNdjson(res)) {
       if (chunk.error) throw new LLMError(String(chunk.error));
+      if (chunk.done_reason === "length") throw truncatedError();
       const msg = chunk.message as { content?: string } | undefined;
       let piece = msg?.content ?? "";
       // Hide inline <think> sections from models that ignore think:false.
@@ -396,15 +461,14 @@ export async function* chatStream(opts: ChatOptions): AsyncGenerator<string> {
 
   if (provider.kind === "openai") {
     const res = await openaiChat(provider, route.model, opts, { stream: true, temperature });
-    for await (const data of readSse(res)) {
-      if (data === "[DONE]") break;
-      try {
-        const json = JSON.parse(data);
-        const piece = json.choices?.[0]?.delta?.content;
-        if (piece) yield piece;
-      } catch {
-        /* keep-alive or partial line */
-      }
+    if (!(res.headers.get("content-type") ?? "").includes("event-stream")) {
+      const text = await collectOpenAI(res, true);
+      if (text) yield text;
+      return;
+    }
+    for await (const json of readOpenAIChunks(res, true)) {
+      const piece = json.choices?.[0]?.delta?.content;
+      if (piece) yield piece;
     }
     return;
   }
@@ -412,12 +476,14 @@ export async function* chatStream(opts: ChatOptions): AsyncGenerator<string> {
   // anthropic
   const client = anthropicClient(provider);
   try {
-    const stream = client.beta.messages.stream({ ...anthropicParams(provider, route.model, { ...opts, temperature }), max_tokens: opts.maxTokens ?? 32000 });
+    const stream = client.beta.messages.stream(
+      { ...anthropicParams(provider, route.model, { ...opts, temperature }), max_tokens: anthropicMaxTokens(route.model, opts.maxTokens, 32000) },
+      { signal: opts.signal },
+    );
     for await (const event of stream) {
       if (event.type === "content_block_delta" && event.delta.type === "text_delta") yield event.delta.text;
     }
-    const final = await stream.finalMessage();
-    if (final.stop_reason === "refusal") throw new LLMError("The model declined this request.");
+    checkAnthropicStop((await stream.finalMessage()).stop_reason);
   } catch (err) {
     if (err instanceof LLMError) throw err;
     throw anthropicError(err);
@@ -430,11 +496,11 @@ export async function chat(opts: ChatOptions): Promise<string> {
   const temperature = opts.temperature ?? route.temperature;
   if (provider.kind === "ollama") {
     const res = await ollamaChat(provider, route.model, opts, { stream: true, numCtx, temperature });
-    return stripThinking(await collectOllama(res));
+    return stripThinking(await collectOllama(res, true));
   }
   if (provider.kind === "openai") {
     const res = await openaiChat(provider, route.model, opts, { stream: true, temperature });
-    return stripThinking(await collectOpenAI(res));
+    return stripThinking(await collectOpenAI(res, true));
   }
   let out = "";
   for await (const piece of chatStream(opts)) out += piece;
@@ -493,16 +559,16 @@ export async function chatJson<T>(schema: z.ZodType<T>, opts: ChatOptions): Prom
     let raw: string;
     if (provider.kind === "ollama") {
       const res = await ollamaChat(provider, route.model, o, { stream: true, format: jsonSchema, numCtx, temperature });
-      raw = await collectOllama(res);
+      raw = await collectOllama(res, false);
     } else if (provider.kind === "openai") {
       const res = await openaiChat(provider, route.model, o, { stream: true, jsonSchema, temperature });
-      raw = await collectOpenAI(res);
+      raw = await collectOpenAI(res, false);
     } else {
       const client = anthropicClient(provider);
       try {
         const params = anthropicParams(provider, route.model, { ...o, temperature }, sanitizeForAnthropic(jsonSchema) as Record<string, unknown>);
-        const msg = await client.beta.messages.create({ ...params, stream: false });
-        if (msg.stop_reason === "refusal") throw new LLMError("The model declined this request.");
+        const msg = await client.beta.messages.create({ ...params, stream: false }, { signal: opts.signal });
+        checkAnthropicStop(msg.stop_reason);
         raw = msg.content.map((b) => (b.type === "text" ? b.text : "")).join("");
       } catch (err) {
         if (err instanceof LLMError) throw err;
@@ -518,7 +584,8 @@ export async function chatJson<T>(schema: z.ZodType<T>, opts: ChatOptions): Prom
     }
     messages = [
       ...messages,
-      { role: "assistant", content: raw.slice(0, 4000) },
+      // An empty assistant turn is rejected by some APIs (Anthropic), and there's nothing to correct in it.
+      ...(raw.trim() ? [{ role: "assistant" as const, content: raw.slice(0, 4000) }] : []),
       { role: "user", content: `That JSON was invalid (${lastErr}). Reply again with ONLY corrected JSON matching the schema.` },
     ];
   }

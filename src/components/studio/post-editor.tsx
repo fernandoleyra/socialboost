@@ -29,7 +29,7 @@ import { uploadPhoto } from "@/components/photos/upload";
 import { Button, Chip, IconButton, Input, Sheet, Typing, api, cx, streamText, toast } from "@/components/ui";
 import { hookOf, parseAngleField, replaceHook, type Angle, type HookOption } from "@/lib/factory/angles";
 import { cleanPost, toClipboard } from "@/lib/factory/clean";
-import { VERIFY_MESSAGE, publishingSince } from "@/lib/calendar/linkedin-format";
+import { STALE_PUBLISH_MS, VERIFY_MESSAGE, publishingSince } from "@/lib/calendar/linkedin-format";
 import { LINKEDIN_MAX_CHARS, autofix, lintPost, type LintHit } from "@/lib/factory/lint";
 import { REVISE_PRESETS, type RevisePresetId } from "@/lib/factory/prompts";
 import { combineScore, isCritiqueFresh, qualityGate } from "@/lib/factory/quality";
@@ -218,10 +218,15 @@ export function PostEditor(props: EditorProps) {
     timer.current = setTimeout(() => void persist(bodyRef.current), 1100);
   };
 
-  // Don't lose edits: warn on tab close, save on in-app navigation.
+  /** Set while a draft or revision streams in. The text on screen is then the model's, not the user's. */
+  const abortRef = useRef<AbortController | null>(null);
+
+  // Don't lose edits: warn on tab close, save on in-app navigation. Mid-generation there is nothing of
+  // the user's to save (their text was flushed before it started) and the server stores the result itself.
   useEffect(() => {
+    const unsaved = () => abortRef.current === null && bodyRef.current !== savedRef.current;
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (bodyRef.current !== savedRef.current) e.preventDefault();
+      if (unsaved()) e.preventDefault();
     };
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
@@ -235,7 +240,7 @@ export function PostEditor(props: EditorProps) {
       window.removeEventListener("beforeunload", onBeforeUnload);
       window.removeEventListener("keydown", onKey);
       if (timer.current) clearTimeout(timer.current);
-      if (bodyRef.current !== savedRef.current) {
+      if (unsaved()) {
         void fetch(`/api/posts/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ body: bodyRef.current }), keepalive: true });
       }
     };
@@ -256,7 +261,6 @@ export function PostEditor(props: EditorProps) {
   /* ---------------- UI state ---------------- */
   const [busy, setBusy] = useState<Busy>(null);
   const [streaming, setStreaming] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
   const [sheet, setSheet] = useState<SheetName>(null);
   const [pending, setPending] = useState<(() => void) | null>(null);
   const [inlineError, setInlineError] = useState<string | null>(null);
@@ -273,6 +277,8 @@ export function PostEditor(props: EditorProps) {
   const archived = post.status === "archived";
   /** Set while the scheduler or a "Publish now" is sending the post (M6's in-flight marker). */
   const publishingAt = publishingSince(post.error);
+  /** The send is still in flight: the server refuses deletes and restores until it settles. */
+  const sending = !!publishingAt && (!hydrated || Date.now() - publishingAt.getTime() < STALE_PUBLISH_MS);
   /** An attempt that LinkedIn didn't confirm: it may be live already. */
   const unconfirmed = post.error === VERIFY_MESSAGE;
 
@@ -688,7 +694,7 @@ export function PostEditor(props: EditorProps) {
               { label: "Mark as posted by hand", icon: CheckCircle2, onClick: () => setSheet("mark-posted"), hidden: !(post.status === "approved" || post.status === "scheduled") },
               { label: "Version history", icon: History, onClick: () => setSheet("versions") },
               { label: "Archive", icon: Archive, onClick: () => void archive(), hidden: archived || published },
-              { label: "Delete post", icon: Trash2, onClick: () => setSheet("delete"), destructive: true },
+              { label: "Delete post", icon: Trash2, onClick: () => setSheet("delete"), destructive: true, hidden: sending },
             ]}
           />
         </div>
@@ -983,7 +989,7 @@ export function PostEditor(props: EditorProps) {
         onClose={() => setSheet(null)}
         postId={id}
         current={body}
-        readOnly={published || locked}
+        readOnly={published || locked || sending}
         onRestored={(p) => {
           setDetail((d) => ({ ...d, post: p }));
           setBody(p.body);

@@ -187,6 +187,19 @@ describe("interview service against a fake local model", () => {
     expect(() => svc.replyStream(profile, iv.id, { content: "hi", photoIds: [] }, signal)).toThrow(/already saved/);
   });
 
+  it("saves every story told in one session, not just the last few", async () => {
+    const profile = repo.getActiveProfile()!;
+    const iv = repo.createInterview({ profileId: profile.id, kind: "story", title: "" });
+    const starts: string[] = [];
+    for (let i = 1; i <= 4; i++) {
+      repo.addMessage(iv.id, "assistant", "Tell me about another moment?");
+      starts.push(repo.addMessage(iv.id, "user", `Story ${i}: the payroll export failed at 11pm on day three and Carmen called me from the back office.`).id);
+    }
+    store.updateInterviewState(iv.id, (s) => ({ ...s, threadStarts: starts }));
+    const res = await svc.finishInterview(profile, iv.id, { photoIds: [] });
+    expect(res.memories).toHaveLength(4);
+  });
+
   it("runs a positioning interview and builds a strategy with pillars", async () => {
     const profile = repo.getActiveProfile()!;
     const iv = svc.startInterview(profile, { kind: "positioning", pillar: null, seed: null, theme: null, knownStory: null });

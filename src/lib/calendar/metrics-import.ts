@@ -175,6 +175,12 @@ export type MatchablePost = { id: string; linkedinUrl: string | null; linkedinUr
 export type MetricsMatch = { postId: string; row: MetricsRow; by: "url" | "date" };
 export type MetricsMiss = { row: MetricsRow; reason: string };
 
+/**
+ * Match export rows to published posts. URLs first, for every row, so a row about someone else's post
+ * can't take one of ours "by date" before our own row gets to it (LinkedIn's export lists every post the
+ * member made, sorted by engagement). Then rows on the exact publish day, then a day either side. In the
+ * date passes file order never decides: when several rows point at the same post, none of them gets it.
+ */
 export function matchMetricsRows(rows: MetricsRow[], posts: MatchablePost[], timezone: string): { matches: MetricsMatch[]; unmatched: MetricsMiss[] } {
   const tz = safeTimezone(timezone);
   const published = posts.filter((p) => p.publishedAt);
@@ -189,6 +195,8 @@ export function matchMetricsRows(rows: MetricsRow[], posts: MatchablePost[], tim
   const matches: MetricsMatch[] = [];
   const unmatched: MetricsMiss[] = [];
 
+  // 1. URL: share, ugcPost and activity ids of the same post may differ, so a miss still tries dates.
+  const byDate: { row: MetricsRow; key: string }[] = [];
   for (const row of rows) {
     const rowIds = extractPostIds(row.url);
     if (rowIds.length) {
@@ -203,21 +211,39 @@ export function matchMetricsRows(rows: MetricsRow[], posts: MatchablePost[], tim
       }
     }
     const key = parseLooseDate(row.date);
-    if (!key) {
-      unmatched.push({ row, reason: rowIds.length ? "No published post has this URL, and the row has no usable date." : "No post URL or readable date." });
-      continue;
-    }
-    const candidates = (k: string) => (byDay.get(k) ?? []).filter((p) => !used.has(p.id));
-    let pool = candidates(key);
-    if (pool.length === 0) pool = [...candidates(addDays(key, -1)), ...candidates(addDays(key, 1))];
-    if (pool.length === 1) {
-      used.add(pool[0].id);
-      matches.push({ postId: pool[0].id, row, by: "date" });
-    } else if (pool.length === 0) {
-      unmatched.push({ row, reason: `No post published around ${key}.` });
-    } else {
-      unmatched.push({ row, reason: `${pool.length} posts went out around ${key}. Add the post URL to tell them apart.` });
-    }
+    if (!key) unmatched.push({ row, reason: rowIds.length ? "No published post has this URL, and the row has no usable date." : "No post URL or readable date." });
+    else byDate.push({ row, key });
   }
-  return { matches, unmatched };
+
+  const candidates = (k: string) => (byDay.get(k) ?? []).filter((p) => !used.has(p.id));
+  /** One date pass: rows whose pool holds exactly one post get it, unless another row wants it too. */
+  const datePass = (pending: { row: MetricsRow; key: string }[], poolOf: (key: string) => MatchablePost[], last: boolean) => {
+    const wanted = new Map<string, { row: MetricsRow; key: string }[]>();
+    const rest: { row: MetricsRow; key: string }[] = [];
+    for (const item of pending) {
+      const pool = poolOf(item.key);
+      if (pool.length === 1) {
+        if (!wanted.has(pool[0].id)) wanted.set(pool[0].id, []);
+        wanted.get(pool[0].id)!.push(item);
+      } else if (pool.length > 1) unmatched.push({ row: item.row, reason: `${pool.length} posts went out around ${item.key}. Add the post URL to tell them apart.` });
+      else if (last) unmatched.push({ row: item.row, reason: `No post published around ${item.key}.` });
+      else rest.push(item);
+    }
+    for (const [postId, items] of wanted) {
+      if (items.length === 1) {
+        used.add(postId);
+        matches.push({ postId, row: items[0].row, by: "date" });
+      } else {
+        for (const { row, key } of items) unmatched.push({ row, reason: `Several rows are dated around ${key}. Add the post URL to tell them apart.` });
+      }
+    }
+    return rest;
+  };
+  // 2. Exact publish day. 3. A day either side (exports and time zones can be a day off).
+  const neighbours = datePass(byDate, (key) => candidates(key), false);
+  datePass(neighbours, (key) => [...candidates(addDays(key, -1)), ...candidates(addDays(key, 1))], true);
+
+  const order = new Map(rows.map((r, i) => [r, i]));
+  const byRow = (a: { row: MetricsRow }, b: { row: MetricsRow }) => order.get(a.row)! - order.get(b.row)!;
+  return { matches: matches.sort(byRow), unmatched: unmatched.sort(byRow) };
 }

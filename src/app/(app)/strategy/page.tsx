@@ -6,7 +6,7 @@ import { StrategyEditor } from "@/components/strategy/strategy-editor";
 import { pillarIdOf } from "@/lib/strategy";
 
 export const dynamic = "force-dynamic";
-export const metadata: Metadata = { title: "Strategy — SocialBoost" };
+export const metadata: Metadata = { title: "Strategy · SocialBoost" };
 
 export default function StrategyPage() {
   const profile = getActiveProfile();

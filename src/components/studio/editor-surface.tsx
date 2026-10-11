@@ -24,7 +24,7 @@ function pickMarks(issues: LintHit[], length: number) {
   return kept.sort((a, b) => a.start! - b.start!);
 }
 
-const TEXT_CLASS = "li-text !text-[15.5px] !leading-[1.6] px-5 py-4 sm:px-6 sm:py-5 whitespace-pre-wrap [overflow-wrap:anywhere]";
+const TEXT_CLASS = "li-text !text-[15.5px] pointer-coarse:!text-[16px] !leading-[1.6] px-5 py-4 sm:px-6 sm:py-5 whitespace-pre-wrap [overflow-wrap:anywhere]";
 
 export type EditorSurfaceHandle = { focus: () => void };
 

@@ -185,13 +185,12 @@ describe("calendar feed", () => {
     expect((await icsRoute.GET(get(data.icsPath))).status).toBe(404);
   });
 
-  it("adds the password gate's feed key so proxy.ts lets calendar apps through", async () => {
+  it("never puts a password-derived value in the feed link", async () => {
     process.env.SOCIALBOOST_PASSWORD = "correct horse";
     try {
-      const { icsKey } = await import("@/lib/auth");
       const data = await (await calendarRoute.GET(get("/api/calendar"))).json();
       const url = new URL(data.icsPath, "http://localhost:3000");
-      expect(url.searchParams.get("key")).toBe(icsKey());
+      expect(url.searchParams.has("key")).toBe(false);
       expect(url.searchParams.get("token")).toMatch(/^[0-9a-f]{32}$/);
       expect((await icsRoute.GET(get(data.icsPath))).status).toBe(200);
     } finally {

@@ -4,6 +4,7 @@ import { getActiveProfile, getStrategy, listMemories } from "@/lib/repo";
 import { listPhotoViews } from "@/lib/photos";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "Photos · SocialBoost" };
 
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
@@ -25,5 +26,5 @@ export default async function PhotosPage({ searchParams }: { searchParams: Searc
   const f = one("filter") ?? (one("unassigned") === "1" ? "unassigned" : null);
   const filter = f === "unassigned" || f === "linked" ? f : "all";
 
-  return <PhotoLibrary initialPhotos={photos} memories={memories} pillars={pillars} openId={one("open")} initialFilter={filter} />;
+  return <PhotoLibrary key={profile.id} initialPhotos={photos} memories={memories} pillars={pillars} openId={one("open")} initialFilter={filter} />;
 }

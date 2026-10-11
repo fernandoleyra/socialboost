@@ -169,6 +169,8 @@ describe("story interview flow", () => {
     expect(s.say("", { photos: ["ph_9"] }).stage).toBe("closing");
     expect(s.state.threadStarts).toHaveLength(0);
     expect(isFinishingReply("No one believed me when I said we'd ship in May.")).toBe(false);
+    for (const t of ["No, gracias", "¡No, gracias!", "No, eso es todo", "No, ya está", "Nein, danke", "Non, merci"]) expect(isFinishingReply(t), t).toBe(true);
+    expect(isFinishingReply("No, el cliente se fue sin pagar")).toBe(false);
   });
 
   it("asks for a specific instance after a generic answer, once", () => {

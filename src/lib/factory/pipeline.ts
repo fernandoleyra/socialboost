@@ -4,6 +4,7 @@ import { logActivity } from "@/lib/db";
 import { HttpError } from "@/lib/http";
 import { LLMError, chat, chatJson, chatStream } from "@/lib/llm";
 import { getMemory, getPost, updatePost } from "@/lib/repo";
+import { getRoute } from "@/lib/settings";
 import type { Critique, Post } from "@/lib/types";
 import { AnglesResponseSchema, HooksResponseSchema, cleanHook, normalizeAngles, parseAngleField, serializeAngleField, toAngle, type Angle, type AngleField, type HookOption } from "./angles";
 import { cleanPost } from "./clean";
@@ -11,7 +12,8 @@ import { loadContext, type FactoryContext } from "./context";
 import { lintPost, type LintResult } from "./lint";
 import { alignFigures } from "./numbers";
 import { openingTooLong, restoreOpening, splitOpening } from "./opening";
-import { applyHumanEdit, postLabel } from "./posts";
+import { VERIFY_MESSAGE, publishingSince } from "@/lib/calendar/linkedin-format";
+import { applyHumanEdit, assertNotPublishing, postLabel } from "./posts";
 import { anglesPrompt, critiquePrompt, draftPrompt, hookChars, hooksPrompt, instructionsFromCritique, instructionsFromLint, openingPrompt, revisePrompt, type Prompt } from "./prompts";
 import { buildQuality, dropUnfoundedInventions, isCritiqueFresh, qualityGate, relint } from "./quality";
 import { REWRITABLE, statusAfterGeneration } from "./status";
@@ -52,12 +54,59 @@ function messages(p: Prompt) {
   return { system: p.system, messages: p.messages };
 }
 
+/**
+ * A local writer has to read the whole prompt within num_ctx and still have room for the post. Drop
+ * the author's example posts (least similar first) until it fits; the notes always stay. A prompt
+ * that still doesn't fit fails with a clear error, because Ollama is told not to truncate.
+ */
+function fitWriterPrompt(ctx: FactoryContext, build: (c: FactoryContext) => Prompt): Prompt {
+  let prompt = build(ctx);
+  const r = getRoute("writer");
+  if (r?.provider.kind !== "ollama") return prompt;
+  // About 3 characters per token: conservative for Spanish, German and French.
+  const budget = (r.numCtx - WRITER_MAX_TOKENS - 300) * 3;
+  const size = (p: Prompt) => p.system.length + p.messages.reduce((n, m) => n + m.content.length, 0);
+  let examples = ctx.examples;
+  while (examples.length && size(prompt) > budget) {
+    examples = examples.slice(0, -1);
+    prompt = build({ ...ctx, examples });
+  }
+  return prompt;
+}
+
 function requireStory(post: Post) {
   if (!post.memoryId) throw new HttpError(400, "This post has no story attached.", "Start the post from a memory in the Studio, or write it yourself and use Revise.");
 }
 
 function requireRewritable(post: Post) {
   if (!REWRITABLE.includes(post.status)) throw new HttpError(409, post.status === "published" ? "This post is already published." : "This post is archived.", "Start a new post from the same story instead.");
+  assertNotPublishing(post);
+}
+
+/**
+ * Generation takes minutes on local models: the scheduler (or "Publish now", or "Mark as posted")
+ * may have sent the post meanwhile. Checked again right before writing, with no await in between.
+ */
+function assertStillRewritable(post: Post) {
+  const kept = "The new text is in Version history.";
+  if (!REWRITABLE.includes(post.status)) {
+    throw new HttpError(409, post.status === "published" ? "This post went out while the writer was working." : "This post was archived while the writer was working.", `${kept} Start a new post from the same story if you want to use it.`);
+  }
+  assertNotPublishing(post, kept);
+}
+
+/** A cancelled request (Draft all → Cancel, closed tab) must not write a late result. */
+function stopIfCancelled(signal?: AbortSignal) {
+  if (signal?.aborted) throw new LLMError("Request cancelled.");
+}
+
+/** Re-read the post right before a write and make sure it may still change. */
+function freshRewritable(postId: string, signal?: AbortSignal): Post {
+  stopIfCancelled(signal);
+  const post = getPost(postId);
+  if (!post) throw new HttpError(404, "Post not found");
+  assertStillRewritable(post);
+  return post;
 }
 
 /** What a text may state as fact: the story, or for a post without one, the text it was written from. */
@@ -119,12 +168,17 @@ async function finalizeGeneration(
   const cleaned = cleanPost(raw);
   if (!cleaned) throw new LLMError("The model returned an empty post.", "Try again, or choose a larger writer model in Settings → Models.");
   const body = await keepHookShort(ctx, facts ? alignFigures(cleaned, facts) : cleaned, { before: opts.before ?? null, facts, signal: opts.signal });
+  // From here to the update everything is synchronous, so the publisher can't slip in between.
+  stopIfCancelled(opts.signal);
   const current = getPost(postId);
   if (!current) throw new HttpError(404, "Post not found");
   const lint = lintFor(ctx, body, opts.extraFacts);
   saveGeneratedVersion(postId, body, source, note);
+  assertStillRewritable(current);
   const quality = relint(current.quality, body, lint.issues, lint.score);
-  return updatePost(postId, { body, quality, status: statusAfterGeneration(current.status), error: null });
+  // A stuck publish or an unconfirmed one still needs the person to check LinkedIn: keep that warning.
+  const error = publishingSince(current.error) || current.error === VERIFY_MESSAGE ? current.error : null;
+  return updatePost(postId, { body, quality, status: statusAfterGeneration(current.status), error });
 }
 
 /* ------------------------------------------------------------------ */
@@ -176,7 +230,7 @@ export async function draftStream(post: Post, input: { angle?: Angle | null; ang
   current = setAngleField(current, field, { format: structure.format });
   snapshotBeforeGeneration(current.id, current.body);
   const ctx = await loadContext(current);
-  const prompt = draftPrompt(ctx, angle, structureId);
+  const prompt = fitWriterPrompt(ctx, (c) => draftPrompt(c, angle, structureId));
   const gen = chatStream({ task: "writer", ...messages(prompt), maxTokens: WRITER_MAX_TOKENS, signal: input.signal });
   const onDone = async (full: string) => {
     const saved = await finalizeGeneration(current.id, ctx, full, "ai", `Draft · ${structure.name}`, { signal: input.signal });
@@ -233,6 +287,7 @@ export async function runCritique(post: Post, body?: string, signal?: AbortSigna
   if (!text.trim()) throw new HttpError(400, "There's nothing to critique yet.", "Draft the post first.");
   const edited = body !== undefined && body !== post.body ? body : null;
   if (edited !== null && post.status === "published") throw new HttpError(409, "This post is already published.", "Edit it on LinkedIn; changes here wouldn't reach your feed.");
+  if (edited !== null) assertNotPublishing(post);
   const current = edited !== null ? applyHumanEdit(post, edited) : post;
   const ctx = await loadContext(current);
   return critiqueWith(ctx, current, text, signal);
@@ -275,7 +330,7 @@ export async function reviseStream(post: Post, input: ReviseInput) {
   snapshotBeforeGeneration(current.id, base);
   const ctx = await loadContext(current);
   const original = current.memoryId ? undefined : base;
-  const gen = chatStream({ task: "writer", ...messages(revisePrompt(ctx, base, changes)), maxTokens: WRITER_MAX_TOKENS, signal: input.signal });
+  const gen = chatStream({ task: "writer", ...messages(fitWriterPrompt(ctx, (c) => revisePrompt(c, base, changes))), maxTokens: WRITER_MAX_TOKENS, signal: input.signal });
   const note = input.note ?? (input.instruction?.trim() ? `Revised: ${input.instruction.trim().slice(0, 80)}` : "Revised");
   const onDone = async (full: string) => {
     await finalizeGeneration(current.id, ctx, full, "revision", note, { before: base, extraFacts: original, signal: input.signal });
@@ -341,7 +396,7 @@ export async function autopilot(post: Post, opts: { force?: boolean; signal?: Ab
   snapshotBeforeGeneration(current.id, current.body);
 
   const ctx = await loadContext(current);
-  const draft = await slowSafe(() => chat({ task: "writer", ...messages(draftPrompt(ctx, angle, structure.id)), maxTokens: WRITER_MAX_TOKENS, signal: opts.signal }));
+  const draft = await slowSafe(() => chat({ task: "writer", ...messages(fitWriterPrompt(ctx, (c) => draftPrompt(c, angle, structure.id))), maxTokens: WRITER_MAX_TOKENS, signal: opts.signal }));
   current = await finalizeGeneration(current.id, ctx, draft, "ai", `Draft · ${structure.name} (autopilot)`, { signal: opts.signal });
   steps.push("draft");
 
@@ -352,7 +407,7 @@ export async function autopilot(post: Post, opts: { force?: boolean; signal?: Ab
     const changes = [...instructionsFromLint(current.quality?.lint ?? []), ...(current.quality?.critique ? instructionsFromCritique(current.quality.critique) : [])];
     if (changes.length) {
       const first = current;
-      const revised = await slowSafe(() => chat({ task: "writer", ...messages(revisePrompt(ctx, first.body, changes)), maxTokens: WRITER_MAX_TOKENS, signal: opts.signal }));
+      const revised = await slowSafe(() => chat({ task: "writer", ...messages(fitWriterPrompt(ctx, (c) => revisePrompt(c, first.body, changes))), maxTokens: WRITER_MAX_TOKENS, signal: opts.signal }));
       current = await finalizeGeneration(current.id, ctx, revised, "revision", "Autopilot fixes", { before: first.body, signal: opts.signal });
       steps.push("revise");
       current = (await critiqueWith(ctx, current, current.body, opts.signal)).post;
@@ -360,13 +415,14 @@ export async function autopilot(post: Post, opts: { force?: boolean; signal?: Ab
       // Both versions now have a fresh lint + critique score. Keep the better one.
       if ((current.quality?.score ?? 0) < (first.quality?.score ?? 0)) {
         saveGeneratedVersion(current.id, first.body, "ai", `Kept the first draft: it scored ${first.quality?.score ?? "–"}, the rewrite ${current.quality?.score ?? "–"}`);
+        freshRewritable(current.id, opts.signal);
         current = updatePost(current.id, { body: first.body, quality: first.quality });
         steps.push("keep-draft");
       }
     }
   }
 
-  if (qualityGate(current.quality, current.body).ready && current.status === "draft") current = updatePost(current.id, { status: "review" });
+  if (qualityGate(current.quality, current.body).ready && freshRewritable(current.id, opts.signal).status === "draft") current = updatePost(current.id, { status: "review" });
   logActivity("post", `Autopilot drafted: ${postLabel(current)} (score ${current.quality?.score ?? "–"})`, { profileId: current.profileId, refId: current.id });
   return { post: current, steps };
 }

@@ -4,9 +4,9 @@
   "private": true,
   "description": "Self-hosted LinkedIn ghostwriting factory: interview-driven story memory, voice matching, content calendar, local models.",
   "scripts": {
-    "dev": "next dev -p 3000",
+    "dev": "next dev -H 127.0.0.1 -p 3000",
     "build": "next build",
-    "start": "next start -p 3000",
+    "start": "next start -H 127.0.0.1 -p 3000",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "db:reset": "rm -f data/socialboost.db*"

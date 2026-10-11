@@ -21,8 +21,9 @@ import {
   Moon,
   Monitor,
   Mic,
+  ChevronRight,
 } from "lucide-react";
-import { cx, api, toast } from "./ui";
+import { Sheet, cx, api, toast } from "./ui";
 
 export type ShellProfile = { id: string; name: string; headline: string };
 
@@ -117,12 +118,10 @@ function ThemeToggle() {
   );
 }
 
-function ProfileSwitcher({ profiles, activeId }: { profiles: ShellProfile[]; activeId: string }) {
-  const [open, setOpen] = useState(false);
+/** Make another person the one being ghostwritten; every page re-renders for them. */
+function useSwitchProfile(activeId: string) {
   const router = useRouter();
-  const active = profiles.find((p) => p.id === activeId) ?? profiles[0];
-  const switchTo = async (id: string) => {
-    setOpen(false);
+  return async (id: string) => {
     if (id === activeId) return;
     try {
       await api("/api/profiles/active", { method: "POST", json: { id } });
@@ -130,6 +129,16 @@ function ProfileSwitcher({ profiles, activeId }: { profiles: ShellProfile[]; act
     } catch (e) {
       toast((e as Error).message, "error");
     }
+  };
+}
+
+function ProfileSwitcher({ profiles, activeId }: { profiles: ShellProfile[]; activeId: string }) {
+  const [open, setOpen] = useState(false);
+  const switchProfile = useSwitchProfile(activeId);
+  const active = profiles.find((p) => p.id === activeId) ?? profiles[0];
+  const switchTo = (id: string) => {
+    setOpen(false);
+    void switchProfile(id);
   };
   return (
     <div className="relative">
@@ -166,8 +175,72 @@ function ProfileSwitcher({ profiles, activeId }: { profiles: ShellProfile[]; act
   );
 }
 
+/**
+ * Below 1024px there's no sidebar: this sheet (opened from the top bar) holds the people, "Add a
+ * person" and every page the tab bar has no room for.
+ */
+function MobileMenu({ profiles, activeId, open, onClose }: { profiles: ShellProfile[]; activeId: string; open: boolean; onClose: () => void }) {
+  const pathname = usePathname();
+  const switchProfile = useSwitchProfile(activeId);
+  return (
+    <Sheet open={open} onClose={onClose} title="SocialBoost" size="sm">
+      <div className="space-y-6">
+        <section aria-labelledby="mobile-menu-people" className="space-y-2">
+          <h2 id="mobile-menu-people" className="t-eyebrow px-1">
+            Writing for
+          </h2>
+          <div className="card list-group">
+            {profiles.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                aria-pressed={p.id === activeId}
+                onClick={() => {
+                  onClose();
+                  void switchProfile(p.id);
+                }}
+                className="list-row w-full text-left hover:bg-fill-4 focus-ring"
+              >
+                <Avatar name={p.name} size={30} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate t-subhead font-semibold">{p.name}</span>
+                  {p.headline && <span className="block truncate t-caption text-label-2">{p.headline}</span>}
+                </span>
+                {p.id === activeId && <Check className="size-4 shrink-0 text-accent" />}
+              </button>
+            ))}
+            <Link href="/welcome?new=1" onClick={onClose} className="list-row t-subhead text-accent hover:bg-fill-4 focus-ring">
+              <span className="grid size-[30px] place-items-center rounded-full bg-fill-3">
+                <Plus className="size-4" />
+              </span>
+              Add a person
+            </Link>
+          </div>
+        </section>
+        <nav aria-labelledby="mobile-menu-more" className="space-y-2">
+          <h2 id="mobile-menu-more" className="t-eyebrow px-1">
+            More
+          </h2>
+          <div className="card list-group">
+            {NAV.filter((n) => !MOBILE_NAV.includes(n.href)).map(({ href, label, icon: Icon }) => (
+              <Link key={href} href={href} onClick={onClose} aria-current={isActive(pathname, href) ? "page" : undefined} className="list-row t-subhead hover:bg-fill-4 focus-ring">
+                <Icon className="size-[18px] text-label-2" />
+                <span className="flex-1">{label}</span>
+                <ChevronRight className="size-4 text-label-3" />
+              </Link>
+            ))}
+          </div>
+        </nav>
+        <ThemeToggle />
+      </div>
+    </Sheet>
+  );
+}
+
 export function Shell({ profiles, activeId, children }: { profiles: ShellProfile[]; activeId: string; children: React.ReactNode }) {
   const pathname = usePathname();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const activeName = profiles.find((p) => p.id === activeId)?.name ?? "?";
   return (
     <div className="min-h-screen lg:pl-[284px]">
       {/* Floating glass sidebar */}
@@ -195,16 +268,25 @@ export function Shell({ profiles, activeId, children }: { profiles: ShellProfile
         </div>
       </aside>
 
-      {/* Mobile top bar */}
+      {/* Mobile top bar: the pill opens people + the pages without a tab */}
       <div className="sticky top-0 z-30 flex items-center justify-between gap-3 px-4 pt-3 pb-2 lg:hidden">
-        <div className="glass flex items-center gap-2 rounded-full py-1.5 pl-1.5 pr-4">
-          <Avatar name={profiles.find((p) => p.id === activeId)?.name ?? "?"} size={28} />
-          <span className="t-subhead font-semibold">SocialBoost</span>
-        </div>
-        <Link href="/settings" className="glass grid size-10 place-items-center rounded-full" aria-label="Settings">
+        <button
+          type="button"
+          onClick={() => setMenuOpen(true)}
+          aria-haspopup="dialog"
+          aria-expanded={menuOpen}
+          aria-label={`Writing for ${activeName}. Switch person or open more pages`}
+          className="glass flex min-w-0 items-center gap-2 rounded-full py-1.5 pl-1.5 pr-3 focus-ring"
+        >
+          <Avatar name={activeName} size={28} />
+          <span className="truncate t-subhead font-semibold">{activeName}</span>
+          <ChevronsUpDown className="size-4 shrink-0 text-label-3" />
+        </button>
+        <Link href="/settings" className="glass grid size-10 shrink-0 place-items-center rounded-full" aria-label="Settings">
           <Settings className="size-4.5" />
         </Link>
       </div>
+      <MobileMenu profiles={profiles} activeId={activeId} open={menuOpen} onClose={() => setMenuOpen(false)} />
 
       <main className="mx-auto w-full max-w-[1240px] px-4 pb-32 pt-4 sm:px-6 lg:px-10 lg:pt-10 lg:pb-16">{children}</main>
 

@@ -249,4 +249,34 @@ describe("memory service", () => {
     photos.editPhoto(loose, { memoryId: m.id });
     expect(repo.getPost(planned.id)!.photoId).toBeNull();
   });
+
+  it("frees a deleted story's empty planned slots and keeps posts that have text", () => {
+    const m = repo.createMemory(profileId, {
+      title: "The late train",
+      summary: "",
+      story: "The 7:12 to Basel was cancelled and I pitched from the platform.",
+      when: "",
+      place: "",
+      people: [],
+      emotions: [],
+      details: [],
+      quotes: [],
+      lesson: "",
+      pillar: null,
+      tags: [],
+      angles: [],
+      strength: 3,
+    });
+    const slot = new Date(Date.now() + 86_400_000).toISOString();
+    const planned = repo.createPost({ profileId, memoryId: m.id, status: "idea", scheduledAt: slot });
+    const written = repo.createPost({ profileId, memoryId: m.id, status: "idea", body: "I pitched from a train platform." });
+    const draft = repo.createPost({ profileId, memoryId: m.id, status: "draft", body: "The 7:12 to Basel was cancelled." });
+    expect(memory.memoryPosts(profileId, m.id).filter((p) => p.placeholder).map((p) => p.id)).toEqual([planned.id]);
+
+    expect(memory.deleteMemoryAndPlaceholders(profileId, m.id)).toBe(1);
+    expect(repo.getMemory(m.id)).toBeNull();
+    expect(repo.getPost(planned.id)).toBeNull();
+    expect(repo.getPost(written.id)).toMatchObject({ memoryId: null, body: "I pitched from a train platform." });
+    expect(repo.getPost(draft.id)).toMatchObject({ memoryId: null, status: "draft" });
+  });
 });

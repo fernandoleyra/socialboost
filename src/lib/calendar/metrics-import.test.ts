@@ -120,9 +120,30 @@ describe("matchMetricsRows", () => {
     expect(res.matches[0]).toMatchObject({ postId: "p2", by: "date" });
   });
 
-  it("never matches the same post twice", () => {
+  it("never matches the same post twice, and file order doesn't pick the winner", () => {
     const res = matchMetricsRows([row({ date: "2026-10-06" }), row({ date: "2026-10-06" })], posts, "UTC");
-    expect(res.matches).toHaveLength(1);
-    expect(res.unmatched).toHaveLength(1);
+    expect(res.matches).toHaveLength(0);
+    expect(res.unmatched.map((u) => u.reason)).toEqual([
+      "Several rows are dated around 2026-10-06. Add the post URL to tell them apart.",
+      "Several rows are dated around 2026-10-06. Add the post URL to tell them apart.",
+    ]);
+  });
+
+  it("doesn't let a row about someone else's post take ours by date", () => {
+    // LinkedIn's export lists all of the member's posts, sorted by engagement, not date.
+    const foreign = row({ url: "https://www.linkedin.com/feed/update/urn:li:activity:7111111111111111111/", date: "2026-10-05" }, 2);
+    const ours = row({ url: "https://www.linkedin.com/posts/ana_x-share-7123456789012345678-abc", date: "2026-10-06" }, 3);
+    const res = matchMetricsRows([foreign, ours], posts, "UTC");
+    expect(res.matches).toEqual([{ postId: "p1", row: ours, by: "url" }]);
+    expect(res.unmatched).toEqual([{ row: foreign, reason: "No post published around 2026-10-05." }]);
+  });
+
+  it("prefers the exact publish day over a neighbouring one, whatever the row order", () => {
+    // Our own row carries an activity id that differs from the stored share URN; a foreign row is a day off.
+    const foreign = row({ url: "https://www.linkedin.com/feed/update/urn:li:activity:7111111111111111111/", date: "2026-10-05" }, 2);
+    const ours = row({ url: "https://www.linkedin.com/feed/update/urn:li:activity:7333333333333333333/", date: "2026-10-06" }, 3);
+    const res = matchMetricsRows([foreign, ours], posts, "UTC");
+    expect(res.matches).toEqual([{ postId: "p1", row: ours, by: "date" }]);
+    expect(res.unmatched.map((u) => u.row)).toEqual([foreign]);
   });
 });

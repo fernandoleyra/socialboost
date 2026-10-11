@@ -18,8 +18,22 @@ import type { Memory, PostStatus } from "@/lib/types";
 import { AutoTextarea, ListEditor, StrengthDots, TokenInput } from "./fields";
 import { StoryDepth, type PillarLite } from "./story-depth";
 
-type PostRef = { id: string; status: PostStatus; scheduledAt: string | null; publishedAt: string | null; linkedinUrl: string | null; updatedAt: string; hook: string };
+type PostRef = { id: string; status: PostStatus; scheduledAt: string | null; publishedAt: string | null; linkedinUrl: string | null; updatedAt: string; hook: string; placeholder: boolean };
 type Detail = { memory: MemoryListItem; photos: PhotoView[]; posts: PostRef[] };
+
+/** What deleting a story does to its posts: written ones stay, empty planned slots are freed. */
+function deleteNote(posts: PostRef[]): string {
+  const live = posts.filter((p) => p.status !== "archived");
+  const written = live.filter((p) => !p.placeholder).length;
+  const planned = live.length - written;
+  return [
+    written ? `${written === 1 ? "One post was" : `${written} posts were`} made from it; they keep their text.` : "",
+    planned ? `${planned === 1 ? "Its planned calendar slot has" : `Its ${planned} planned calendar slots have`} no text yet and will be freed.` : "",
+  ]
+    .filter(Boolean)
+    .map((t) => t + " ")
+    .join("");
+}
 
 const DRAFT_KEYS = ["title", "summary", "story", "when", "place", "people", "emotions", "details", "quotes", "lesson", "pillar", "tags", "angles", "status", "strength"] as const;
 type DraftKey = (typeof DRAFT_KEYS)[number];
@@ -610,7 +624,7 @@ export function MemorySheet({
         confirmLabel="Delete story"
         body={
           <>
-            {memory?.postCount ? `${memory.postCount === 1 ? "One post was" : `${memory.postCount} posts were`} made from it; they keep their text. ` : ""}
+            {deleteNote(detail?.posts ?? [])}
             Its photos stay in your Photos library. This can&apos;t be undone.
           </>
         }

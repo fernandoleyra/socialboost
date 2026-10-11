@@ -1,6 +1,6 @@
 "use client";
 
-import { forwardRef, useEffect, useRef, useState, type ButtonHTMLAttributes, type HTMLAttributes, type InputHTMLAttributes, type ReactNode, type TextareaHTMLAttributes, type SelectHTMLAttributes } from "react";
+import { forwardRef, useCallback, useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type HTMLAttributes, type InputHTMLAttributes, type ReactNode, type TextareaHTMLAttributes, type SelectHTMLAttributes } from "react";
 import { createPortal } from "react-dom";
 import { X, Loader2, CheckCircle2, AlertTriangle, Info } from "lucide-react";
 
@@ -110,7 +110,7 @@ export function Field({ label, hint, children, className }: { label: ReactNode; 
     <label className={cx("block space-y-1.5", className)}>
       <span className="t-footnote font-semibold text-label-2 px-1">{label}</span>
       {children}
-      {hint && <span className="block t-caption text-label-3 px-1">{hint}</span>}
+      {hint && <span className="block t-caption text-label-2 px-1">{hint}</span>}
     </label>
   );
 }
@@ -211,12 +211,25 @@ export function Stat({ label, value, sub, tone = "blue", icon }: { label: ReactN
 /* Sheet (modal)                                                       */
 /* ------------------------------------------------------------------ */
 
-/** Open sheets, topmost last: only the topmost one reacts to Escape. */
+/** Open sheets, topmost last: only the topmost one reacts to Escape and Tab. */
 const sheetStack: symbol[] = [];
+
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]), [contenteditable="true"]';
+
+/** Keep Tab and Shift+Tab inside the sheet: the page behind the backdrop isn't usable while it's open. */
+function trapTab(e: KeyboardEvent, panel: HTMLElement) {
+  const items = [...panel.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((n) => n.getClientRects().length > 0);
+  e.preventDefault();
+  if (!items.length) return panel.focus();
+  const at = items.indexOf(document.activeElement as HTMLElement);
+  const next = at < 0 ? (e.shiftKey ? items.length - 1 : 0) : (at + (e.shiftKey ? -1 : 1) + items.length) % items.length;
+  items[next].focus();
+}
 
 export function Sheet({ open, onClose, title, children, footer, size = "md" }: { open: boolean; onClose: () => void; title?: ReactNode; children: ReactNode; footer?: ReactNode; size?: "sm" | "md" | "lg" | "xl" }) {
   const [mounted, setMounted] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   useEffect(() => setMounted(true), []);
@@ -226,7 +239,10 @@ export function Sheet({ open, onClose, title, children, footer, size = "md" }: {
     sheetStack.push(token);
     const previouslyFocused = document.activeElement as HTMLElement | null;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || sheetStack[sheetStack.length - 1] !== token) return;
+      if (sheetStack[sheetStack.length - 1] !== token) return;
+      if (e.key === "Tab" && panelRef.current) return trapTab(e, panelRef.current);
+      // Escape while an input method is composing (accents, Japanese, Chinese) cancels the candidate, not the sheet.
+      if (e.key !== "Escape" || e.isComposing) return;
       e.stopPropagation();
       onCloseRef.current();
     };
@@ -246,11 +262,13 @@ export function Sheet({ open, onClose, title, children, footer, size = "md" }: {
   if (!open || !mounted) return null;
   const width = { sm: "max-w-md", md: "max-w-xl", lg: "max-w-3xl", xl: "max-w-5xl" }[size];
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-6" role="dialog" aria-modal="true">
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-6" role="dialog" aria-modal="true" aria-labelledby={title ? titleId : undefined}>
       <div className="absolute inset-0 bg-black/25 backdrop-blur-[2px] animate-in" onClick={onClose} />
       <div ref={panelRef} tabIndex={-1} className={cx("glass-strong relative w-full rounded-t-[28px] sm:rounded-window max-h-[92vh] flex flex-col animate-pop outline-none", width)}>
         <div className="flex items-center justify-between gap-4 px-6 pt-5 pb-3">
-          <div className="t-title-3 min-w-0 truncate">{title}</div>
+          <div id={titleId} className="t-title-3 min-w-0 truncate">
+            {title}
+          </div>
           <IconButton label="Close" onClick={onClose} className="bg-fill-4">
             <X className="size-4" />
           </IconButton>
@@ -275,27 +293,70 @@ export function toast(message: string, kind: ToastKind = "success") {
   pushToast?.({ message, kind });
 }
 
+/**
+ * Toasts are announced to screen readers (errors as alerts), pause while hovered or focused, and
+ * errors, often the only report of a failure and its fix, stay 15 s and have a close button.
+ */
 export function Toaster() {
   const [items, setItems] = useState<ToastItem[]>([]);
   const idRef = useRef(0);
+  const timers = useRef(new Map<number, ReturnType<typeof setTimeout>>());
+  const dismiss = useCallback((id: number) => {
+    clearTimeout(timers.current.get(id));
+    timers.current.delete(id);
+    setItems((xs) => xs.filter((x) => x.id !== id));
+  }, []);
+  const schedule = useCallback(
+    (t: ToastItem) => {
+      clearTimeout(timers.current.get(t.id));
+      timers.current.set(
+        t.id,
+        setTimeout(() => dismiss(t.id), t.kind === "error" ? 15000 : 3500),
+      );
+    },
+    [dismiss],
+  );
+  const hold = (id: number) => {
+    clearTimeout(timers.current.get(id));
+    timers.current.delete(id);
+  };
   useEffect(() => {
+    const all = timers.current;
     pushToast = (t) => {
-      const id = ++idRef.current;
-      setItems((xs) => [...xs, { ...t, id }]);
-      setTimeout(() => setItems((xs) => xs.filter((x) => x.id !== id)), t.kind === "error" ? 7000 : 3500);
+      const item = { ...t, id: ++idRef.current };
+      setItems((xs) => [...xs, item]);
+      schedule(item);
     };
     return () => {
       pushToast = null;
+      all.forEach(clearTimeout);
+      all.clear();
     };
-  }, []);
+  }, [schedule]);
   return (
-    <div className="pointer-events-none fixed inset-x-0 top-4 z-[60] flex flex-col items-center gap-2 px-4">
+    <div role="status" aria-live="polite" className="pointer-events-none fixed inset-x-0 top-4 z-[60] flex flex-col items-center gap-2 px-4">
       {items.map((t) => (
-        <div key={t.id} className="glass-strong pointer-events-auto flex max-w-lg items-center gap-2.5 rounded-full px-4 py-2.5 t-subhead font-medium animate-pop">
+        <div
+          key={t.id}
+          role={t.kind === "error" ? "alert" : undefined}
+          onMouseEnter={() => hold(t.id)}
+          onMouseLeave={() => schedule(t)}
+          onFocus={() => hold(t.id)}
+          onBlur={() => schedule(t)}
+          className={cx(
+            "glass-strong pointer-events-auto flex max-w-lg items-center gap-2.5 py-2.5 t-subhead font-medium animate-pop",
+            t.kind === "error" ? "rounded-[22px] pl-4 pr-2" : "rounded-full px-4",
+          )}
+        >
           {t.kind === "success" && <CheckCircle2 className="size-4.5 text-sys-green shrink-0" />}
           {t.kind === "error" && <AlertTriangle className="size-4.5 text-sys-red shrink-0" />}
           {t.kind === "info" && <Info className="size-4.5 text-sys-blue shrink-0" />}
-          <span>{t.message}</span>
+          <span className="min-w-0">{t.message}</span>
+          {t.kind === "error" && (
+            <IconButton label="Dismiss" onClick={() => dismiss(t.id)} className="size-8! shrink-0">
+              <X className="size-4" />
+            </IconButton>
+          )}
         </div>
       ))}
     </div>

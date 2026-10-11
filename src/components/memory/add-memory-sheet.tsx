@@ -44,18 +44,29 @@ export function AddMemorySheet({
   // Read when the sheet opens; later changes to the prop's identity don't reset the form.
   const initialRef = useRef(initialPhotos);
   initialRef.current = initialPhotos;
+  /** Start from a blank form on the next open: true at first and after a story was saved. */
+  const resetNext = useRef(true);
+  const draftEmpty = useRef(true);
+  draftEmpty.current = !story.trim() && !title.trim();
 
+  // A story typed and then closed by a stray tap or Esc is still here when the sheet reopens.
   useEffect(() => {
     if (!open) return;
-    setTitle("");
-    setStory("");
-    setPillar("");
-    setWhen("");
-    setPlace("");
     setSaving(false);
-    setCreated(null);
-    setWarning(null);
-    setPhotos(initialRef.current);
+    if (resetNext.current || draftEmpty.current) {
+      resetNext.current = false;
+      setTitle("");
+      setStory("");
+      setPillar("");
+      setWhen("");
+      setPlace("");
+      setCreated(null);
+      setWarning(null);
+      setPhotos(initialRef.current);
+    } else {
+      // Opened again from another photo: add it to the draft.
+      setPhotos((ps) => [...ps, ...initialRef.current.filter((p) => !ps.some((x) => x.id === p.id))]);
+    }
   }, [open]);
 
   const tooShort = story.trim().length < 40;
@@ -77,6 +88,7 @@ export function AddMemorySheet({
         },
       });
       const memory = { ...res.memory, postCount: 0 };
+      resetNext.current = true;
       setCreated(memory);
       setWarning(res.warning ?? null);
       onCreated(memory);

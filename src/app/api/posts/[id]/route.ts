@@ -5,9 +5,9 @@ import { handle, ok, HttpError } from "@/lib/http";
 import { deletePost, getPhoto, requireProfile, updatePost } from "@/lib/repo";
 import { POST_STATUSES, type Post } from "@/lib/types";
 import { normalizeAngles, parseAngleField, serializeAngleField } from "@/lib/factory/angles";
-import { applyHumanEdit, postDetail, postLabel, requireMemory, requirePost } from "@/lib/factory/posts";
+import { applyHumanEdit, assertNotPublishing, postDetail, postLabel, requireMemory, requirePost } from "@/lib/factory/posts";
 import { checkStatusChange, STATUS_META } from "@/lib/factory/status";
-import { PUBLISHING_MARKER, STALE_PUBLISH_MS, publishingSince } from "@/lib/calendar/linkedin-format";
+import { PUBLISHING_MARKER } from "@/lib/calendar/linkedin-format";
 
 export const dynamic = "force-dynamic";
 
@@ -80,10 +80,7 @@ export const PATCH = handle(async (req: Request, ctx: Ctx) => {
   const statusChanged = !!status && status !== post.status;
 
   // Same rule as the Calendar: no changes while the scheduler or "Publish now" is sending this text.
-  const publishing = publishingSince(post.error);
-  if (publishing && Date.now() - publishing.getTime() < STALE_PUBLISH_MS && (rescheduled || statusChanged || (patch.body !== undefined && patch.body !== post.body))) {
-    throw new HttpError(409, "This post is being published right now.", "Wait a moment, then refresh the page.");
-  }
+  if (rescheduled || statusChanged || (patch.body !== undefined && patch.body !== post.body)) assertNotPublishing(post);
   if (status && status !== post.status) {
     const check = checkStatusChange({ from: post.status, to: status, body: nextBody, scheduledAt: nextScheduled });
     if (!check.ok) throw new HttpError(400, check.message, check.hint);
@@ -131,6 +128,8 @@ export const DELETE = handle(async (_req: Request, ctx: Ctx) => {
   const profile = requireProfile();
   const { id } = await ctx.params;
   const post = requirePost(profile.id, id);
+  // The publisher records its result on this row; deleting it mid-send would leave a live LinkedIn post with no trace here.
+  assertNotPublishing(post);
   deletePost(post.id);
   logActivity("post", `Deleted post: ${postLabel(post)}`, { profileId: profile.id, refId: null });
   return ok({ ok: true });

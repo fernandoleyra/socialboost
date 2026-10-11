@@ -141,8 +141,8 @@ export type ReplyIntent = "photo-later" | undefined;
  */
 export function isFinishingReply(text: string): boolean {
   if (isDoneSignal(text) || isAcknowledgement(text) || isSkipAnswer(text)) return true;
-  const t = text.trim().toLowerCase().replace(/[.!]+$/, "");
-  return /^(?:(?:no|nope|nah)(?:[,.!]*\s*(?:thanks?|thank you|all good|that'?s (?:it|all)|i'?m (?:good|done|fine)|not (?:now|today)))*|not (?:really|now|today)|maybe later)$/.test(t);
+  const t = text.trim().toLowerCase().replace(/^[¡¿]+\s*/, "").replace(/[.!]+$/, "");
+  return /^(?:(?:no|nope|nah|nop|não|nein|non)(?:[,.!]*\s*(?:thanks?|thank you|gracias|muchas gracias|obrigad[oa]|grazie|merci|danke|all good|that'?s (?:it|all)|eso es todo|ya est[aá]|nada m[aá]s|estoy bien|i'?m (?:good|done|fine)|not (?:now|today)))*|not (?:really|now|today)|maybe later)$/u.test(t);
 }
 
 function lastAssistantBefore(messages: TranscriptMessage[], index: number): TranscriptMessage | undefined {

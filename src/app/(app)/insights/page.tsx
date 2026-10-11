@@ -10,5 +10,5 @@ export const metadata = { title: "Insights · SocialBoost" };
 export default function InsightsPage() {
   const profile = getActiveProfile();
   if (!profile) redirect("/welcome");
-  return <InsightsBoard initial={insightsFor(profile)} />;
+  return <InsightsBoard key={profile.id} initial={insightsFor(profile)} />;
 }

@@ -7,8 +7,10 @@
 services:
   app:
     build: .
+    # Reachable from this machine only. To open it to your network or the internet, set SOCIALBOOST_PASSWORD
+    # and change this to "3000:3000" (ideally behind an HTTPS reverse proxy).
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     volumes:
       - ./data:/app/data
     environment:
@@ -18,6 +20,7 @@ services:
       SOCIALBOOST_EMBED_MODEL: ${SOCIALBOOST_EMBED_MODEL:-embeddinggemma}
       STT_BASE_URL: ${STT_BASE_URL:-}
       SOCIALBOOST_PASSWORD: ${SOCIALBOOST_PASSWORD:-}
+      SOCIALBOOST_ALLOWED_HOSTS: ${SOCIALBOOST_ALLOWED_HOSTS:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       LINKEDIN_CLIENT_ID: ${LINKEDIN_CLIENT_ID:-}
       LINKEDIN_CLIENT_SECRET: ${LINKEDIN_CLIENT_SECRET:-}
@@ -26,8 +29,10 @@ services:
 
   ollama:
     image: ollama/ollama:latest
+    # The app reaches Ollama at http://ollama:11434 inside the compose network; this mapping only lets tools
+    # on this machine reach it too. Ollama has no authentication, so keep it on loopback.
     ports:
-      - "11434:11434"
+      - "127.0.0.1:11434:11434"
     volumes:
       - ollama:/root/.ollama
     restart: unless-stopped
@@ -43,7 +48,7 @@ services:
     profiles: ["voice"]
     image: ghcr.io/speaches-ai/speaches:latest-cpu
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
       PRELOAD_MODELS: '["Systran/faster-whisper-small"]'
       STT_MODEL_TTL: "-1"

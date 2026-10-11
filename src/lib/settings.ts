@@ -1,6 +1,7 @@
 import "server-only";
 import { getDb, parseJson } from "./db";
-import { AISettingsSchema, type AISettings, type ModelTask } from "./types";
+import { AISettingsSchema, type AISettings, type ModelTask, type ProviderConfig } from "./types";
+import { sameProviderEndpoint } from "./provider-endpoint";
 
 export function getSetting<T>(key: string, fallback: T): T {
   const row = getDb().prepare(`SELECT value FROM settings WHERE key = ?`).get(key) as { value: string } | undefined;
@@ -114,11 +115,15 @@ export function maskAISettings(s: AISettings): AISettings {
   return { ...s, providers: s.providers.map((p) => ({ ...p, apiKey: maskKey(p.apiKey) })) };
 }
 
-/** Swap masked keys coming back from the browser for the stored ones (matched by provider id). */
-export function unmaskProvider<T extends { id: string; apiKey: string }>(p: T): T {
+/**
+ * Swap masked keys coming back from the browser for the stored ones (matched by provider id). The
+ * stored key is only restored while the provider still points at the same kind and host; a changed
+ * address gets no key, so it can't be used to send the saved key somewhere else.
+ */
+export function unmaskProvider<T extends Pick<ProviderConfig, "id" | "kind" | "baseUrl" | "apiKey">>(p: T): T {
   if (!isMaskedKey(p.apiKey)) return p;
   const stored = getAISettings().providers.find((x) => x.id === p.id);
-  return { ...p, apiKey: stored?.apiKey ?? "" };
+  return { ...p, apiKey: stored && sameProviderEndpoint(stored, p) ? stored.apiKey : "" };
 }
 
 export function unmaskAISettings(s: AISettings): AISettings {

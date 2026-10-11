@@ -4,6 +4,7 @@ import { getActiveProfile } from "@/lib/repo";
 import { getVoiceState, indexInBackground } from "@/lib/voice/service";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "Voice · SocialBoost" };
 
 export default function VoicePage() {
   const profile = getActiveProfile();

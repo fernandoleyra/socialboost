@@ -38,6 +38,9 @@
   /* Filled controls use Apple's increased-contrast blue: white on #0088FF is only 3.5:1, on #1E6EF4 it is 4.6:1. */
   --accent-fill: #1e6ef4;
   --accent-contrast: #ffffff;
+  /* Text in accent or orange needs 4.5:1: #0088FF on white is 3.5:1, #FF8D28 is 2.3:1. */
+  --accent-text: var(--accent-fill);
+  --sys-orange-text: #c25700;
 
   /* --- Labels & fills --- */
   --label: #000000;
@@ -118,6 +121,9 @@
   --sys-brown: #b78a66;
   --sys-gray: #98989d;
 
+  --accent-text: var(--sys-blue);
+  --sys-orange-text: var(--sys-orange);
+
   --label: #ffffff;
   --label-2: rgba(235, 235, 245, 0.62);
   --label-3: rgba(235, 235, 245, 0.32);
@@ -152,10 +158,48 @@
   --wall-base: #07080c;
 }
 
+/*
+ * Increased contrast: Settings → Appearance or the system setting. Unlayered and after the theme
+ * blocks on purpose: inside @layer they would lose to the unlayered tokens above and do nothing.
+ */
+@media (prefers-contrast: more) {
+  :root:not([data-theme="dark"]) {
+    --accent: var(--accent-fill);
+    --label-2: rgba(60, 60, 67, 0.82);
+    --label-3: rgba(60, 60, 67, 0.6);
+    --separator: rgba(60, 60, 67, 0.5);
+    --glass-edge: rgba(0, 0, 0, 0.5);
+  }
+  :root[data-theme="dark"] {
+    --accent: #5cb8ff;
+    --accent-text: #5cb8ff;
+    --label-2: rgba(235, 235, 245, 0.82);
+    --label-3: rgba(235, 235, 245, 0.6);
+    --separator: rgba(235, 235, 245, 0.42);
+    --glass-edge: rgba(255, 255, 255, 0.5);
+  }
+}
+:root[data-contrast="more"] {
+  --accent: var(--accent-fill);
+  --label-2: rgba(60, 60, 67, 0.82);
+  --label-3: rgba(60, 60, 67, 0.6);
+  --separator: rgba(60, 60, 67, 0.5);
+  --glass-edge: rgba(0, 0, 0, 0.45);
+}
+:root[data-contrast="more"][data-theme="dark"] {
+  --accent: #5cb8ff;
+  --accent-text: #5cb8ff;
+  --label-2: rgba(235, 235, 245, 0.82);
+  --label-3: rgba(235, 235, 245, 0.6);
+  --separator: rgba(235, 235, 245, 0.42);
+  --glass-edge: rgba(255, 255, 255, 0.5);
+}
+
 @theme inline {
   --font-sans: var(--font-sans);
   --font-mono: var(--font-mono);
-  --color-accent: var(--accent);
+  /* Accent utilities are mostly text and icons: use the AA-contrast shade. */
+  --color-accent: var(--accent-text);
   --color-label: var(--label);
   --color-label-2: var(--label-2);
   --color-label-3: var(--label-3);
@@ -167,7 +211,8 @@
   --color-sys-blue: var(--sys-blue);
   --color-sys-green: var(--sys-green);
   --color-sys-indigo: var(--sys-indigo);
-  --color-sys-orange: var(--sys-orange);
+  /* Only used as text-sys-orange; tints use var(--sys-orange) directly. */
+  --color-sys-orange: var(--sys-orange-text);
   --color-sys-pink: var(--sys-pink);
   --color-sys-purple: var(--sys-purple);
   --color-sys-red: var(--sys-red);
@@ -480,14 +525,14 @@
 
   /* Plain/tinted text buttons. */
   .btn-plain {
-    color: var(--accent);
+    color: var(--accent-text);
     background: transparent;
   }
   .btn-plain:hover:not(:disabled) {
     background: color-mix(in srgb, var(--accent) 10%, transparent);
   }
   .btn-tinted {
-    color: var(--accent);
+    color: var(--accent-text);
     background: color-mix(in srgb, var(--accent) 14%, transparent);
   }
   .btn-tinted:hover:not(:disabled) {
@@ -535,6 +580,12 @@
       box-shadow var(--dur) var(--spring),
       border-color var(--dur) var(--spring);
     outline: none;
+  }
+  /* iOS Safari zooms into any focused field under 16px and stays zoomed: keep touch fields at 16px. */
+  @media (pointer: coarse) {
+    .field {
+      font-size: 16px;
+    }
   }
   .field::placeholder {
     color: var(--label-3);
@@ -675,7 +726,7 @@
   }
   .nav-item[aria-current="page"] {
     background: color-mix(in srgb, var(--accent) 14%, transparent);
-    color: var(--accent);
+    color: var(--accent-text);
   }
   .nav-item[aria-current="page"] svg {
     color: var(--accent);
@@ -824,18 +875,6 @@
     backdrop-filter: none !important;
     background: var(--bg-elevated) !important;
   }
-  :root[data-contrast="more"] {
-    --accent: var(--accent-fill);
-    --label-2: rgba(60, 60, 67, 0.82);
-    --separator: rgba(60, 60, 67, 0.5);
-    --glass-edge: rgba(0, 0, 0, 0.45);
-  }
-  :root[data-contrast="more"][data-theme="dark"] {
-    --accent: #5cb8ff;
-    --label-2: rgba(235, 235, 245, 0.82);
-    --separator: rgba(235, 235, 245, 0.42);
-    --glass-edge: rgba(255, 255, 255, 0.5);
-  }
 
   @media (prefers-reduced-transparency: reduce) {
     .glass,
@@ -850,10 +889,6 @@
     }
   }
   @media (prefers-contrast: more) {
-    :root {
-      --glass-edge: rgba(0, 0, 0, 0.5);
-      --separator: rgba(60, 60, 67, 0.5);
-    }
     .glass,
     .glass-strong,
     .card {

@@ -6,11 +6,10 @@ import { requestOrigin } from "@/lib/calendar/origin";
 export const dynamic = "force-dynamic";
 
 /**
- * GET /api/calendar/ics?profile=<id>&token=<secret>[&key=<gate key>] → text/calendar feed of
- * planned, scheduled and recently published posts (post text in DESCRIPTION, link to the Studio).
- * Calendar apps fetch it without a session, so it's protected by a per-profile secret instead.
- * `key` is only there for the optional password gate (src/proxy.ts); links made before `token`
- * existed carried the secret in `key`, so that still works when the gate is off.
+ * GET /api/calendar/ics?profile=<id>&token=<secret> → text/calendar feed of planned, scheduled and
+ * recently published posts (post text in DESCRIPTION, link to the Studio). Calendar apps fetch it
+ * without a session, so it's protected by a per-profile random secret instead (src/proxy.ts lets
+ * GETs through the password gate). Links made before `token` existed carried the secret in `key`.
  */
 export const GET = handle(async (req: Request) => {
   const url = new URL(req.url);

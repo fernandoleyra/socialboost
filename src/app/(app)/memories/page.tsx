@@ -5,6 +5,7 @@ import { queryMemories } from "@/lib/memory";
 import { parseMemoryFilter, type MemoryFilter } from "@/lib/memory-core";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "Memory Bank · SocialBoost" };
 
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
@@ -22,5 +23,5 @@ export default async function MemoriesPage({ searchParams }: { searchParams: Sea
   const pillars = (getStrategy(profile.id)?.pillars ?? []).map((p) => ({ id: p.id, name: p.name, color: p.color }));
   const initial = await queryMemories(profile.id, { filter, pillar });
 
-  return <MemoryBank initial={initial} pillars={pillars} initialFilter={filter} initialPillar={pillar} openId={one("open") ?? one("id")} />;
+  return <MemoryBank key={profile.id} initial={initial} pillars={pillars} initialFilter={filter} initialPillar={pillar} openId={one("open") ?? one("id")} />;
 }

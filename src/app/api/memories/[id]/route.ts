@@ -1,7 +1,7 @@
 import { handle, ok } from "@/lib/http";
 import { logActivity } from "@/lib/db";
-import { deleteMemory, requireProfile } from "@/lib/repo";
-import { MemoryFieldsSchema, memoryPosts, patchMemory, postCountsByMemory, requireOwnedMemory } from "@/lib/memory";
+import { requireProfile } from "@/lib/repo";
+import { MemoryFieldsSchema, deleteMemoryAndPlaceholders, memoryPosts, patchMemory, postCountsByMemory, requireOwnedMemory } from "@/lib/memory";
 import { listPhotoViews, readJsonBody } from "@/lib/photos";
 
 export const dynamic = "force-dynamic";
@@ -30,12 +30,16 @@ export const PATCH = handle(async (req: Request, ctx: Ctx) => {
   return ok({ memory: { ...memory, postCount: postCountsByMemory(profile.id).get(id) ?? 0 } });
 });
 
-/** DELETE /api/memories/[id] — photos stay in the library (unassigned); posts keep their text. */
+/**
+ * DELETE /api/memories/[id] → { ok, freedSlots } — photos stay in the library (unassigned); posts keep
+ * their text; planned ideas with no text yet go with the story so Auto-plan can refill their slots.
+ */
 export const DELETE = handle(async (_req: Request, ctx: Ctx) => {
   const { id } = await ctx.params;
   const profile = requireProfile();
   const memory = requireOwnedMemory(profile.id, id);
-  deleteMemory(id);
-  logActivity("memory", `Deleted the story “${memory.title}”`, { profileId: profile.id });
-  return ok({ ok: true });
+  const freedSlots = deleteMemoryAndPlaceholders(profile.id, id);
+  const freed = freedSlots ? ` and ${freedSlots === 1 ? "its planned slot" : `${freedSlots} planned slots`}` : "";
+  logActivity("memory", `Deleted the story “${memory.title}”${freed}`, { profileId: profile.id });
+  return ok({ ok: true, freedSlots });
 });

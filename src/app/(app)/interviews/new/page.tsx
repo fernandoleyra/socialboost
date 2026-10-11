@@ -5,7 +5,7 @@ import { neediestPillar, pillarStats, planStoryInterview } from "@/lib/interview
 import { getActiveProfile, getStrategy, listInterviews, listMemories } from "@/lib/repo";
 
 export const dynamic = "force-dynamic";
-export const metadata: Metadata = { title: "New interview — SocialBoost" };
+export const metadata: Metadata = { title: "New interview · SocialBoost" };
 
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 

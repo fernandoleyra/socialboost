@@ -71,7 +71,7 @@ export function PillarBalance({ rows, storyTarget }: { rows: PillarBalanceRow[];
               </div>
             );
           })}
-          <p className="border-t border-separator pt-3 t-caption text-label-3">
+          <p className="border-t border-separator pt-3 t-caption text-label-2">
             The marker shows your target mix. Two weeks of posting uses about {storyTarget} stories.
           </p>
         </div>

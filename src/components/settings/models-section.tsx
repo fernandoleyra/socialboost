@@ -375,7 +375,7 @@ export function ModelsSection({ initial }: { initial: AISettings }) {
         </datalist>
       ))}
 
-      <Group level={3} title="Context window" footer="How much text a local model reads at once (Ollama num_ctx). Bigger lets the writer see more of your past posts and stories but needs more memory. 8K suits 7-14B models on 16 GB.">
+      <Group level={3} title="Context window" footer="How much text a local model reads at once (Ollama num_ctx). Bigger lets the writer see more of your past posts and stories but needs more memory. 8K suits 7-14B models on 16 GB; with 4K long stories may not fit the writer.">
         <div className="list-row">
           <span className="flex-1 t-subhead font-medium">Tokens</span>
           <Select value={String(draft.numCtx)} onChange={(e) => setDraft((d) => ({ ...d, numCtx: Number(e.target.value) }))} className="w-40!" aria-label="Context window">

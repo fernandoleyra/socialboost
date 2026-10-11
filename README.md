@@ -94,8 +94,15 @@ On a Mac, run Ollama natively (Docker can't use the Apple GPU) and start only th
 
 ### Running it online
 
-SocialBoost is single-tenant. If you put it on a server, set `SOCIALBOOST_PASSWORD` — the whole studio then sits
-behind a sign-in screen (the calendar feed gets its own read-only key). Put it behind HTTPS.
+SocialBoost is single-tenant. Out of the box it only listens on this computer (`npm start`, `npm run dev` and the
+Docker mapping all bind to `127.0.0.1`), and without a password it only answers requests addressed to `localhost`.
+
+To open it to your network or the internet, set `SOCIALBOOST_PASSWORD` — the whole studio then sits behind a sign-in
+screen (calendar feed links carry their own random secret) — and listen on all interfaces: `npm start -- -H 0.0.0.0`,
+or change the compose mapping to `"3000:3000"`. Put it behind HTTPS (a reverse proxy such as Caddy or nginx).
+On a trusted home network you can skip the password by listing the addresses you'll use, e.g.
+`SOCIALBOOST_ALLOWED_HOSTS=studio.lan,192.168.1.20` — anyone on that network then has full access, including your
+API keys.
 
 ## Connecting LinkedIn (optional)
 

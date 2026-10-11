@@ -12,7 +12,7 @@ import { AccessSection } from "@/components/settings/access-section";
 import { authEnabled } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
-export const metadata: Metadata = { title: "Settings — SocialBoost" };
+export const metadata: Metadata = { title: "Settings · SocialBoost" };
 
 const JUMP = [
   { href: "#profile", label: "Profile" },

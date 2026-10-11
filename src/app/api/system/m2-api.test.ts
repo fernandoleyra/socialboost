@@ -163,6 +163,20 @@ describe("with a profile", () => {
     saveAISettings(s);
   });
 
+  it("restores a masked API key only while the provider keeps its kind and address", async () => {
+    const { saveAISettings, getAISettings, maskAISettings, unmaskAISettings } = await import("@/lib/settings");
+    const s = getAISettings();
+    saveAISettings({ ...s, providers: [...s.providers, { id: "anthropic", kind: "anthropic", label: "Claude", baseUrl: "https://api.anthropic.com", apiKey: "sk-ant-secret" }] });
+    const masked = maskAISettings(getAISettings()).providers.find((p) => p.id === "anthropic")!;
+    expect(masked.apiKey).not.toContain("secret");
+    const keyFor = (p: typeof masked) => unmaskAISettings({ ...getAISettings(), providers: [p] }).providers[0].apiKey;
+    expect(keyFor(masked)).toBe("sk-ant-secret");
+    expect(keyFor({ ...masked, label: "Renamed", baseUrl: "https://api.anthropic.com/" })).toBe("sk-ant-secret");
+    expect(keyFor({ ...masked, kind: "openai", baseUrl: "https://attacker.example/v1" })).toBe("");
+    expect(keyFor({ ...masked, baseUrl: "https://attacker.example" })).toBe("");
+    saveAISettings(s);
+  });
+
   it("reports an unreachable Ollama with a hint and no false positives", async () => {
     const res = await healthRoute.GET();
     const report = await res.json();

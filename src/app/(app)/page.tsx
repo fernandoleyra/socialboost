@@ -12,7 +12,7 @@ import { ActivityList } from "@/components/today/activity-list";
 import { QuickCapture } from "@/components/today/quick-capture";
 
 export const dynamic = "force-dynamic";
-export const metadata: Metadata = { title: "Today — SocialBoost" };
+export const metadata: Metadata = { title: "Today · SocialBoost" };
 
 function statusLine(v: DashboardView): string {
   if (!v.hasStrategy) return "Let's get your LinkedIn engine running. It starts with a short conversation about what you want LinkedIn to do for you.";
@@ -45,7 +45,7 @@ export default function TodayPage() {
         }
       />
 
-      <div className="grid gap-6 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2">
           <NextActions actions={v.actions} />
         </div>
@@ -70,7 +70,7 @@ export default function TodayPage() {
 
       <WeekStrip week={v.week} pillars={pillarMap} />
 
-      <div className="grid gap-6 md:grid-cols-2">
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
         <PillarBalance rows={v.balance} storyTarget={s.storyTarget} />
         <ActivityList items={v.activity} now={now} />
       </div>

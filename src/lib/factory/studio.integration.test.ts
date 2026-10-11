@@ -38,6 +38,8 @@ const GLUED =
   "At 7:40 in the Basel office our biggest client asked one question. We had spent three days on the bug and I had told the whole team it was the database, so I walked into that room sure we were about to lose the account.\n\nIt took twenty minutes once we looked at the proxy.\n\nWhen did a client spot the fix before you did?";
 
 const calls: { system: string; format: boolean; stream: boolean }[] = [];
+/** While set, the model stub waits for it: lets a test change the post mid-generation. */
+let hold: Promise<void> | null = null;
 
 function ollamaStub() {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -47,6 +49,7 @@ function ollamaStub() {
     const body = JSON.parse(String(init?.body)) as { messages: { role: string; content: string }[]; stream: boolean; format?: unknown };
     const system = body.messages.find((m) => m.role === "system")?.content ?? "";
     calls.push({ system, format: !!body.format, stream: body.stream });
+    if (hold) await hold;
     let content: string;
     if (/plan LinkedIn posts/.test(system)) {
       content = JSON.stringify({
@@ -247,6 +250,38 @@ describe("studio flow", () => {
     expect(post).toMatchObject({ status: "scheduled", scheduledAt: slot });
     // Unscheduling keeps it approved and off the calendar.
     expect((await (await patch({ status: "approved", scheduledAt: null })).json()).post).toMatchObject({ status: "approved", scheduledAt: null });
+  });
+
+  it("never rewrites a post that was published or started publishing while the writer worked", async () => {
+    const { publishingMarker } = await import("@/lib/calendar/linkedin-format");
+    const text = "At 7:40 in the Basel office our biggest client asked one question.";
+    const later = new Date(Date.now() + 86_400_000).toISOString();
+    for (const meanwhile of ["published", "publishing"] as const) {
+      const { post: p } = await (await postsRoute.POST(req("POST", "/api/posts", { memoryId }))).json();
+      repo.updatePost(p.id, { body: text, status: "scheduled", scheduledAt: later });
+      let release!: () => void;
+      hold = new Promise((r) => (release = r));
+      const res = await reviseRoute.POST(req("POST", "/api/studio/revise", { postId: p.id, preset: "shorter" }));
+      const sent = repo.updatePost(p.id, meanwhile === "published" ? { status: "published", publishedAt: new Date().toISOString() } : { error: publishingMarker() });
+      release();
+      hold = null;
+      const streamed = await res.text();
+      expect(streamed).toContain("\u0000");
+      expect(repo.getPost(p.id)).toMatchObject({ body: text, status: sent.status, error: sent.error });
+      // The rewrite isn't lost: it's in the history.
+      expect(repo.listPostVersions(p.id)[0].body).toBe(REVISED);
+    }
+  });
+
+  it("refuses deletes, restores and edits while the post is being published", async () => {
+    const { publishingMarker } = await import("@/lib/calendar/linkedin-format");
+    const { post: p } = await (await postsRoute.POST(req("POST", "/api/posts", { memoryId }))).json();
+    repo.updatePost(p.id, { body: "At 7:40 in the Basel office our client asked one question.", status: "scheduled", error: publishingMarker() });
+    expect((await postRoute.DELETE(req("DELETE", `/api/posts/${p.id}`), ctx(p.id))).status).toBe(409);
+    expect((await versionsRoute.POST(req("POST", `/api/posts/${p.id}/versions`, { versionId: "any" }), ctx(p.id))).status).toBe(409);
+    expect((await critiqueRoute.POST(req("POST", "/api/studio/critique", { postId: p.id, body: "Something else." }))).status).toBe(409);
+    expect((await reviseRoute.POST(req("POST", "/api/studio/revise", { postId: p.id, preset: "shorter" }))).status).toBe(409);
+    expect(repo.getPost(p.id)).toMatchObject({ body: "At 7:40 in the Basel office our client asked one question.", status: "scheduled" });
   });
 
   it("never serves another profile's post", async () => {

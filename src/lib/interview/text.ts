@@ -22,6 +22,12 @@ const norm = (s: string) =>
 /** Polite tails allowed after an English done phrase ("that's it for now, thanks"). */
 const DONE_TAIL = String.raw`(?:[,.!]*\s*(?:for (?:now|today)|thanks?|thank you|really|i think|i guess|from me|here|now))*$`;
 const done = (body: string) => new RegExp(`^${body}${DONE_TAIL}`);
+/**
+ * Other languages: an optional "no," first, the phrase, polite tails, nothing else. Anchored at the
+ * end rather than with \b, which never matches after a non-ASCII letter ("ya está").
+ */
+const doneIn = (phrases: string, tails: string) =>
+  new RegExp(String.raw`^(?:(?:no|não|non|nein),?\s+)?(?:${phrases})(?:[,.!]*\s*(?:${tails}))*$`, "u");
 
 /**
  * English patterns are anchored to the whole message so answers like "No more than ten
@@ -33,17 +39,20 @@ const DONE_PATTERNS = [
   done(String.raw`(?:done|all done|finished|nothing (?:else|more)(?: to add)?|no more|that'?s enough)`),
   done(String.raw`(?:let'?s|can we|i want to|i'?d like to) (?:finish|wrap(?: it| this)? up|stop|end|save)(?: (?:it|this|the story|the interview))?`),
   done(String.raw`(?:wrap(?: it| this)? up|finish(?: it)?|save (?:it|the story))`),
-  // es / pt / it / fr / de
-  /^(eso es todo|ya est[aá]|nada m[aá]s|he terminado|es todo)\b/,
-  /^([ée] isso|s[oó] isso|terminei|nada mais)\b/,
-  /^([èe] tutto|ho finito|niente altro)\b/,
-  /^(c'?est tout|j'?ai fini|rien d'?autre)\b/,
-  /^(das war'?s|das ist alles|fertig|nichts mehr)\b/,
+  // es / pt / it / fr / de, anchored the same way: "Nada más llegar, me llamó" is a story, "Nada más" isn't.
+  doneIn(String.raw`eso es todo(?: lo que (?:recuerdo|tengo|s[eé]))?|es todo|ya est[aá]|nada m[aá]s|he terminado|ya termin[eé]`, String.raw`gracias|muchas gracias|vale|de momento|por ahora|por hoy|creo|nada m[aá]s`),
+  doneIn(String.raw`[ée] isso|s[oó] isso|[ée] tudo|terminei|nada mais`, String.raw`obrigad[oa]|por agora|por hoje|acho`),
+  doneIn(String.raw`[èe] tutto|ho finito|niente altro`, String.raw`grazie|per ora|per oggi|credo`),
+  doneIn(String.raw`c'?est tout|j'?ai fini|rien d'?autre`, String.raw`merci|pour l'?instant|pour aujourd'?hui|je crois`),
+  doneIn(String.raw`das war'?s|das ist alles|fertig|nichts mehr`, String.raw`danke|f[uü]r heute|f[uü]r jetzt|glaube ich`),
 ];
+
+/** Spanish opens exclamations and questions with ¡ and ¿ ("¡Ya está!", "¡Genial! ¿Y después?"). */
+const INVERTED = /^[¡¿]+\s*/;
 
 /** The user is signalling they have nothing more to add. Only short messages count. */
 export function isDoneSignal(text: string): boolean {
-  const t = norm(text).replace(/[.!]+$/, "");
+  const t = norm(text).replace(INVERTED, "").replace(/[.!]+$/, "");
   if (!t || wordCount(t) > 10) return false;
   return DONE_PATTERNS.some((re) => re.test(t));
 }
@@ -277,10 +286,10 @@ const FILLER =
 const PRAISE =
   /^(that'?s|that is|what|this is|sounds like|it sounds like) (a |an |such a |really |so )?(great|good|interesting|powerful|amazing|impressive|fascinating|valuable|important|wonderful|brilliant|incredible|fantastic|remarkable|inspiring)\b|^(great|good|glad|nice|happy) to hear\b/i;
 
-/** Generic praise or filler that adds nothing ("Great!", "That's a great lesson.", "Got it."). */
+/** Generic praise or filler that adds nothing ("Great!", "That's a great lesson.", "Got it.", "¡Qué buena historia!"). */
 export function isFiller(sentence: string): boolean {
-  const t = sentence.trim();
-  return (wordCount(t) <= 6 && FILLER.test(t)) || (wordCount(t) <= 8 && PRAISE.test(t));
+  const t = sentence.trim().replace(INVERTED, "");
+  return (wordCount(t) <= 6 && FILLER.test(t)) || (wordCount(t) <= 8 && (PRAISE.test(t) || ES_VERDICT.test(t)));
 }
 
 /*
@@ -329,11 +338,29 @@ const capitalize = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 const sentenceWords = (s: string) => s.split(/\s+/).filter(Boolean).length;
 
 /**
+ * Run a praise filter past a leading ¡ or ¿, which would otherwise hide "¡Genial!" from the
+ * ^-anchored patterns. Unchanged text keeps its mark; a stripped lead-in takes its "¡" with it.
+ */
+function pastInverted(text: string, strip: (t: string) => string): string {
+  const t = text.trim();
+  const mark = INVERTED.exec(t)?.[0];
+  if (!mark) return strip(t);
+  const bare = t.slice(mark.length);
+  const out = strip(bare);
+  if (out === bare) return t;
+  return out && bare.startsWith(out.replace(/[.!?]$/, "")) ? mark + out : out;
+}
+
+/**
  * The part of a statement worth keeping once praise is removed: "" for a pure verdict ("That's a
  * clear goal."), the factual part for "They need someone who gets the business side, that's key."
  * Neutral reflections come back unchanged.
  */
 export function stripPraise(sentence: string): string {
+  return pastInverted(sentence, stripPraiseBare);
+}
+
+function stripPraiseBare(sentence: string): string {
   let t = sentence.trim();
   if (!t) return "";
   // "Great, so you were alone in the office." → "So you were alone in the office."
@@ -367,6 +394,10 @@ export function stripPraise(sentence: string): string {
 
 /** A question minus a praise lead-in: "That's a clear goal, so which topics …?" → "Which topics …?" */
 export function stripPraisePrefix(question: string): string {
+  return pastInverted(question, stripPraisePrefixBare);
+}
+
+function stripPraisePrefixBare(question: string): string {
   const t = question.trim();
   const lead = PRAISE_WORD_OPENER.exec(t) ?? VERDICT_OPENER.exec(t);
   if (!lead) return t;

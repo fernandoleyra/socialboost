@@ -50,6 +50,15 @@ describe("answer classification", () => {
     expect(isDoneSignal("That's all I needed to hear, he said")).toBe(false);
   });
 
+  it("understands done signals with accents, a leading no and polite tails", () => {
+    for (const t of ["Ya está", "¡Ya está!", "Ya está, gracias", "No, ya está", "No, eso es todo", "Eso es todo por ahora, gracias", "Nada más.", "C'est tout, merci", "Das ist alles, danke", "É isso, obrigada"]) {
+      expect(isDoneSignal(t), t).toBe(true);
+    }
+    // A story that only starts like a done phrase.
+    expect(isDoneSignal("Nada más llegar a la oficina, me llamó el jefe")).toBe(false);
+    expect(isDoneSignal("Ya está todo el equipo esperando en la sala")).toBe(false);
+  });
+
   it("detects acknowledgements", () => {
     expect(isAcknowledgement("ok thanks!")).toBe(true);
     expect(isAcknowledgement("Great")).toBe(true);
@@ -230,9 +239,20 @@ describe("praise filter", () => {
       "Love the detail about the flour.",
       "You made a smart call.",
       "Eso es clave.",
+      "¡Qué buena historia!",
+      "¡Genial!",
     ]) {
       expect(stripPraise(line), line).toBe("");
     }
+  });
+
+  it("sees praise behind Spanish opening marks and keeps neutral ones", () => {
+    expect(stripPraise("¡Genial! ¿Y qué pasó después?")).toBe("¿Y qué pasó después?");
+    expect(stripPraisePrefix("¡Excelente! ¿Cuándo fue la reunión?")).toBe("¿Cuándo fue la reunión?");
+    expect(stripPraise("¿Dónde estabas cuando llamó?")).toBe("¿Dónde estabas cuando llamó?");
+    expect(stripPraisePrefix("¿Quién estaba en la sala?")).toBe("¿Quién estaba en la sala?");
+    expect(isFiller("¡Qué buena historia!")).toBe(true);
+    expect(isFiller("¡Llegamos a las tres!")).toBe(false);
   });
 
   it("keeps the factual part of a reflection with a verdict tacked on", () => {

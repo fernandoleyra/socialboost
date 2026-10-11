@@ -7,7 +7,7 @@ import { PositioningCard, StoryInterviewCard } from "@/components/interview/inte
 import { getActiveProfile, getStrategy, listInterviews } from "@/lib/repo";
 
 export const dynamic = "force-dynamic";
-export const metadata: Metadata = { title: "Interviews — SocialBoost" };
+export const metadata: Metadata = { title: "Interviews · SocialBoost" };
 
 export default function InterviewsPage() {
   const profile = getActiveProfile();

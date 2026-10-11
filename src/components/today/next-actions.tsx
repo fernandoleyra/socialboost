@@ -109,7 +109,7 @@ export function NextActions({ actions }: { actions: NextAction[] }) {
                   <Icon className="size-[18px]" />
                 </span>
                 <span className="min-w-0 flex-1 py-0.5">
-                  <span className="flex items-center gap-2 t-subhead font-semibold">
+                  <span className="flex min-w-0 items-center gap-2 t-subhead font-semibold">
                     <span className="truncate">{a.title}</span>
                     {a.urgent && <span className="size-2 shrink-0 rounded-full bg-sys-red" aria-label="Due today" />}
                   </span>

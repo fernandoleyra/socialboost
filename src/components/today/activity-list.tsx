@@ -51,7 +51,7 @@ export function ActivityList({ items, now }: { items: ActivityItem[]; now: Date 
                   <Icon className="size-4" />
                 </span>
                 <span className="min-w-0 flex-1 truncate t-subhead">{a.message}</span>
-                <time dateTime={a.at} className="shrink-0 t-caption text-label-3">
+                <time dateTime={a.at} className="shrink-0 t-caption text-label-2">
                   {when}
                 </time>
               </>

@@ -498,7 +498,6 @@ async function finishStory(profile: Profile, interview: Interview, msgs: Transcr
   const userWords = (t: TranscriptMessage[]) => t.filter((m) => m.role === "user").reduce((n, m) => n + wordCount(m.content), 0);
   let threads = splitThreads(msgs, state.threadStarts).filter((t) => userWords(t) >= 12);
   if (threads.length === 0) threads = [msgs];
-  threads = threads.slice(-3);
 
   const extraPhotos = ownedPhotos(profile.id, extraPhotoIds).map((p) => p.id);
   const cards: { memory: ReturnType<typeof cardToMemory>; photoIds: string[] }[] = [];

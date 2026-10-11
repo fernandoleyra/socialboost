@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { CircleCheck, Eye, EyeOff, TriangleAlert } from "lucide-react";
 import type { ProviderConfig, ProviderKind } from "@/lib/types";
+import { sameProviderEndpoint } from "@/lib/provider-endpoint";
 import { Button, Chip, Field, Input, Segmented, Sheet, api } from "@/components/ui";
 import { DEFAULT_BASE_URL, PROVIDER_KIND_HINT, PROVIDER_KIND_LABEL, validateProvider } from "./presets";
 
@@ -58,8 +59,11 @@ export function ProviderSheet({
     setResult(null);
   };
 
-  const draft = { kind, label: label.trim(), baseUrl: baseUrl.trim(), apiKey: kind === "ollama" ? "" : apiKey.trim() };
-  const error = validateProvider(draft);
+  // The saved key comes back masked and the server only restores it for the same address and kind,
+  // so a provider pointed somewhere new needs its key typed again.
+  const keyLeftBehind = !!initial && kind !== "ollama" && apiKey.startsWith("••••") && !sameProviderEndpoint(initial, { kind, baseUrl });
+  const draft = { kind, label: label.trim(), baseUrl: baseUrl.trim(), apiKey: kind === "ollama" || keyLeftBehind ? "" : apiKey.trim() };
+  const error = keyLeftBehind ? "Enter the API key again for the new address (or clear the field if it doesn't need one)." : validateProvider(draft);
 
   const test = async () => {
     setTouched(true);
@@ -110,7 +114,16 @@ export function ProviderSheet({
           <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder={DEFAULT_BASE_URL[kind]} inputMode="url" spellCheck={false} />
         </Field>
         {kind !== "ollama" && (
-          <Field label="API key" hint={kind === "openai" ? "Leave empty for local servers that don't need one." : "Stored in your local database only."}>
+          <Field
+            label="API key"
+            hint={
+              keyLeftBehind
+                ? "The saved key only goes to the address it was saved for. Enter it again for the new address."
+                : kind === "openai"
+                  ? "Leave empty for local servers that don't need one."
+                  : "Stored in your local database only."
+            }
+          >
             <div className="relative">
               <Input
                 type={showKey ? "text" : "password"}
