@@ -4,10 +4,12 @@ import {
   activePreset,
   applyPreset,
   buildHealthReport,
+  machineLabel,
   modelAvailable,
   normalizeOllamaModel,
   presetModels,
   pullAllCommand,
+  recommendPreset,
   routesMissingModel,
   tasksUsingProvider,
   uniqueProviderId,
@@ -161,5 +163,27 @@ describe("unsaveable routes", () => {
     const s = settings();
     const blank = { ...s, routes: { ...s.routes, writer: { providerId: "ollama", model: "  " }, vision: null } };
     expect(routesMissingModel(blank)).toEqual(["writer"]);
+  });
+});
+
+describe("machine recommendation", () => {
+  it("picks the preset that fits the machine's memory", () => {
+    expect(recommendPreset(8)).toBe("light");
+    expect(recommendPreset(16)).toBe("recommended");
+    expect(recommendPreset(24)).toBe("recommended");
+    expect(recommendPreset(32)).toBe("pro");
+    expect(recommendPreset(64)).toBe("pro");
+  });
+
+  it("names the machine for copy", () => {
+    expect(machineLabel({ platform: "darwin", arch: "arm64" })).toBe("Mac with Apple silicon");
+    expect(machineLabel({ platform: "win32", arch: "x64" })).toBe("Windows PC");
+    expect(machineLabel({ platform: "linux", arch: "x64" })).toBe("Linux machine");
+  });
+
+  it("adds the machine and its recommended preset to the health report", () => {
+    const r = buildHealthReport(settings(), [up([])], new Date("2026-10-11T00:00:00Z"), { memGB: 32, platform: "darwin", arch: "arm64" });
+    expect(r.machine).toEqual({ memGB: 32, platform: "darwin", arch: "arm64", recommended: "pro", label: "Mac with Apple silicon" });
+    expect(buildHealthReport(settings(), [up([])]).machine).toBeUndefined();
   });
 });

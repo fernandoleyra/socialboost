@@ -8,7 +8,7 @@ import { Button, Field, Input, Select, api, cx, toast } from "@/components/ui";
 import { HealthList } from "@/components/settings/health-list";
 import { LANGUAGES, browserLanguage, browserTimezone, normalizeLinkedInUrl } from "@/components/settings/options";
 import { useTimezoneOptions } from "@/components/settings/use-timezones";
-import { activePreset, applyPreset, type HealthReport } from "@/components/settings/presets";
+import { activePreset, applyPreset, getPreset, presetModels, pullAllCommand, type HealthReport } from "@/components/settings/presets";
 
 type Step = "intro" | "about" | "models" | "angle";
 
@@ -112,12 +112,13 @@ export function WelcomeFlow({ adding }: { adding: boolean }) {
     if (step === "models" && !report && !checking && !checkError) void check();
   }, [step, report, checking, checkError, check]);
 
-  const switchToLight = async () => {
-    if (!ai) return;
+  /** Apply the preset that fits this machine (from the health check), then re-check models. */
+  const useRecommended = async () => {
+    if (!ai || !report?.machine) return;
     setApplying(true);
     try {
-      await api("/api/settings/ai", { method: "PUT", json: applyPreset(ai, "light") });
-      toast("Switched to the light models");
+      await api("/api/settings/ai", { method: "PUT", json: applyPreset(ai, report.machine.recommended) });
+      toast(`Switched to the ${getPreset(report.machine.recommended).label} models`);
       await check();
     } catch (err) {
       toast((err as Error).message, "error");
@@ -310,17 +311,22 @@ export function WelcomeFlow({ adding }: { adding: boolean }) {
                     </p>
                   )}
                   <HealthList report={report} compact />
-                  {ai && activePreset(ai) !== "light" && !report.summary.ready && (
+                  {ai && report.machine && activePreset(ai) !== report.machine.recommended && (
                     <div className="flex flex-wrap items-center justify-between gap-3 rounded-inner border border-separator p-4">
-                      <div className="flex items-start gap-3">
+                      <div className="flex min-w-0 items-start gap-3">
                         <Zap className="mt-0.5 size-5 shrink-0 text-sys-yellow" />
-                        <div>
-                          <div className="t-subhead font-semibold">Laptop with 8 GB of memory?</div>
-                          <p className="t-footnote text-label-2">Switch to smaller models (Qwen3 4B, Gemma 3 4B). Faster downloads, a little less polish.</p>
+                        <div className="min-w-0">
+                          <div className="t-subhead font-semibold">
+                            Recommended for this {report.machine.label.startsWith("Mac") ? "Mac" : "machine"}: {getPreset(report.machine.recommended).label}
+                          </div>
+                          <p className="t-footnote text-label-2">
+                            {report.machine.memGB} GB of memory. {getPreset(report.machine.recommended).description}
+                          </p>
+                          <code className="mt-1 block break-all font-mono t-caption text-label-2">{pullAllCommand(presetModels(report.machine.recommended))}</code>
                         </div>
                       </div>
-                      <Button size="sm" variant="tinted" onClick={switchToLight} loading={applying}>
-                        Use light models
+                      <Button size="sm" variant="tinted" onClick={useRecommended} loading={applying}>
+                        Use {getPreset(report.machine.recommended).label}
                       </Button>
                     </div>
                   )}

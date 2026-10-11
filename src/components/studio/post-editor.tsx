@@ -28,6 +28,7 @@ import {
 import { uploadPhoto } from "@/components/photos/upload";
 import { Button, Chip, IconButton, Input, Sheet, Typing, api, cx, streamText, toast } from "@/components/ui";
 import { hookOf, parseAngleField, replaceHook, type Angle, type HookOption } from "@/lib/factory/angles";
+import { linkedinComposerUrl } from "@/lib/calendar/linkedin-format";
 import { cleanPost, toClipboard } from "@/lib/factory/clean";
 import { STALE_PUBLISH_MS, VERIFY_MESSAGE, publishingSince } from "@/lib/calendar/linkedin-format";
 import { LINKEDIN_MAX_CHARS, autofix, lintPost, type LintHit } from "@/lib/factory/lint";
@@ -73,7 +74,6 @@ type Busy = "angles" | "draft" | "revise" | "hooks" | "status" | "photo" | "publ
 type SheetName = "angles" | "versions" | "hooks" | "photo" | "schedule" | "approve-no-photo" | "delete" | "rewrite-approved" | "mark-posted" | null;
 type SaveState = "saved" | "dirty" | "saving" | "error";
 
-const LINKEDIN_COMPOSER = "https://www.linkedin.com/feed/?shareActive=true";
 
 function InlineError({ message }: { message: string }) {
   return (
@@ -541,13 +541,15 @@ export function PostEditor(props: EditorProps) {
 
   /* ---------------- misc actions ---------------- */
   const copy = async (open = false) => {
-    try {
-      await navigator.clipboard.writeText(toClipboard(bodyRef.current));
-      toast(open ? "Copied. Paste it into LinkedIn." : "Post copied");
-    } catch {
-      toast("Couldn't reach the clipboard. Select the text and copy it by hand.", "error");
-    }
-    if (open) window.open(LINKEDIN_COMPOSER, "_blank", "noopener");
+    const text = toClipboard(bodyRef.current);
+    // Start the copy and open LinkedIn inside the click, so popup blockers allow the new tab.
+    const copying = navigator.clipboard.writeText(text).then(
+      () => true,
+      () => false,
+    );
+    if (open) window.open(linkedinComposerUrl(text), "_blank", "noopener,noreferrer");
+    if (await copying) toast(open ? "Copied. If LinkedIn's box is empty, paste it." : "Post copied");
+    else toast(open ? "LinkedIn opened. Copy the text here if the box is empty." : "Couldn't reach the clipboard. Select the text and copy it by hand.", open ? "info" : "error");
   };
 
   const runAutofix = () => {

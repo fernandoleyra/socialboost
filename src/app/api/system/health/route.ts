@@ -3,6 +3,7 @@ import { LLMError, listModels } from "@/lib/llm";
 import { getAISettings } from "@/lib/settings";
 import type { ProviderConfig } from "@/lib/types";
 import { buildHealthReport, type ProviderHealth } from "@/components/settings/presets";
+import { machineInfo } from "@/lib/machine";
 
 export const dynamic = "force-dynamic";
 
@@ -51,5 +52,5 @@ export const GET = handle(async () => {
   }
 
   const results = await Promise.all(providers.map(ping));
-  return ok(buildHealthReport(settings, results));
+  return ok(buildHealthReport(settings, results, new Date(), machineInfo()));
 });

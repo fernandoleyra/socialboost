@@ -2,6 +2,8 @@ import "server-only";
 import { getDb, parseJson } from "./db";
 import { AISettingsSchema, type AISettings, type ModelTask, type ProviderConfig } from "./types";
 import { sameProviderEndpoint } from "./provider-endpoint";
+import { machineInfo } from "./machine";
+import { getPreset, recommendPreset } from "@/components/settings/presets";
 
 export function getSetting<T>(key: string, fallback: T): T {
   const row = getDb().prepare(`SELECT value FROM settings WHERE key = ?`).get(key) as { value: string } | undefined;
@@ -21,8 +23,10 @@ export function setSetting(key: string, value: unknown) {
 export function defaultAISettings(): AISettings {
   const ollamaUrl = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
   // One natively multimodal model for every text task and vision, so Ollama never swaps
-  // models mid-interview (see docs/MODELS.md for the light / multilingual / pro presets).
-  const writer = process.env.SOCIALBOOST_WRITER_MODEL || "gemma4:12b";
+  // models mid-interview. Until someone picks a preset, use the one that fits this machine's
+  // memory (docs/MODELS.md: light / recommended / multilingual / pro).
+  const fit = getPreset(recommendPreset(machineInfo().memGB)).routes;
+  const writer = process.env.SOCIALBOOST_WRITER_MODEL || fit.writer?.model || "gemma4:12b";
   const fast = process.env.SOCIALBOOST_FAST_MODEL || writer;
   const providers: AISettings["providers"] = [
     { id: "ollama", kind: "ollama", label: "Ollama (local)", baseUrl: ollamaUrl, apiKey: "" },
@@ -53,7 +57,7 @@ export function defaultAISettings(): AISettings {
       writer: { providerId: "ollama", model: writer, temperature: 0.8 },
       critic: { providerId: "ollama", model: fast, temperature: 0.2 },
       vision: { providerId: "ollama", model: process.env.SOCIALBOOST_VISION_MODEL || writer, temperature: 0.2 },
-      embedding: { providerId: "ollama", model: process.env.SOCIALBOOST_EMBED_MODEL || "embeddinggemma" },
+      embedding: { providerId: "ollama", model: process.env.SOCIALBOOST_EMBED_MODEL || fit.embedding?.model || "embeddinggemma" },
       transcription: process.env.STT_BASE_URL ? { providerId: "stt", model: process.env.STT_MODEL || "Systran/faster-whisper-small" } : null,
     },
     numCtx: Number(process.env.SOCIALBOOST_NUM_CTX || 8192),

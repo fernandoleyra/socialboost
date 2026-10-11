@@ -5,11 +5,14 @@ data and hardware (some LinkedIn exports and screens couldn't be verified withou
 
 ## Day 1 — set up (30 minutes)
 
-1. Install [Ollama](https://ollama.com) and pull the models for your machine (see the table in the README):
+1. Install the [Ollama](https://ollama.com) app and pull the models for your machine (see the table in the README).
+   On a Mac with 32 GB or more (Pro preset, ~19 GB download):
    ```bash
-   ollama pull gemma4:12b        # Recommended (16 GB RAM). Light: qwen3.5:4b. Spanish-first: qwen3.5:9b
-   ollama pull embeddinggemma
+   ollama pull muse-glimmer:30b
+   ollama pull qwen3-embedding:0.6b
    ```
+   16 GB: `gemma4:12b` + `embeddinggemma`. 8 GB: `qwen3.5:4b` + `embeddinggemma`.
+   The welcome screen detects your memory and offers the matching preset in one click.
 2. `npm install && npm run build && npm start`, open http://localhost:3000.
 3. Welcome screen: your name, headline, LinkedIn URL, the language you post in, your timezone.
 4. **Model check** on the same screen: everything should be green. If not, it shows the exact `ollama pull` to run.
@@ -47,10 +50,15 @@ Aim for 6 ready stories (two weeks of posts at 3 a week).
 
 ## Publishing
 
-- **Without LinkedIn connected** (default): on the day, the post shows as *Due* with *Copy text* and *Download photo*.
-  Post it, then paste the post link back so Insights can track it.
-- **With LinkedIn connected** (Settings → LinkedIn): approved, scheduled posts go out at their time. Tokens last
-  60 days; the app warns you before they expire.
+Copy-and-share always works; the LinkedIn API is optional on top of it.
+
+- **Copy and share** (default, no setup): on the day, the post shows as *Due*. *Open LinkedIn* opens the composer with
+  the text filled in (and copied, in case LinkedIn ignores it); *Photo* downloads the picture to attach. Post it, then
+  paste the post link back so Insights can track it. Studio has the same *Copy & open LinkedIn* in its menu.
+- **LinkedIn API** (Settings → LinkedIn, optional): approved, scheduled posts go out at their time. If a publish fails,
+  the laptop was asleep, or the 60-day token expired, the post falls back to *Due* with copy-and-share, so nothing is
+  lost. If LinkedIn didn't confirm a publish (it may already be live), the post shows *Check LinkedIn* first so you
+  never post twice. The app warns you before the token expires.
 
 ## After two weeks
 

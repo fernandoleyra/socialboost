@@ -104,6 +104,26 @@ export const PRESETS: Preset[] = [
   },
 ];
 
+/** The machine SocialBoost runs on (from the server: total memory, OS, CPU architecture). */
+export type MachineInfo = { memGB: number; platform: string; arch: string };
+
+/** "Mac with Apple silicon", "Mac", "Windows PC", "Linux machine"… for copy. */
+export function machineLabel(m: Pick<MachineInfo, "platform" | "arch">): string {
+  if (m.platform === "darwin") return m.arch === "arm64" ? "Mac with Apple silicon" : "Mac";
+  if (m.platform === "win32") return "Windows PC";
+  return "Linux machine";
+}
+
+/**
+ * The preset that fits this machine. Local models need roughly their size in free memory;
+ * on a Mac the GPU can use about two thirds of RAM, so 32 GB comfortably runs a 30B model.
+ */
+export function recommendPreset(memGB: number): PresetId {
+  if (memGB >= 31) return "pro";
+  if (memGB >= 15) return "recommended";
+  return "light";
+}
+
 export function getPreset(id: PresetId): Preset {
   return PRESETS.find((p) => p.id === id) ?? PRESETS[0];
 }
@@ -254,11 +274,13 @@ export type HealthReport = {
   providers: ProviderHealth[];
   routes: RouteHealth[];
   summary: { ready: boolean; missingRequired: number; missingRecommended: number; pullCommands: string[] };
+  /** Present when the server could read its own hardware. */
+  machine?: MachineInfo & { recommended: PresetId; label: string };
   checkedAt: string;
 };
 
 /** Combine provider pings with the routing table. Pure so it can be tested. */
-export function buildHealthReport(settings: AISettings, providers: ProviderHealth[], now = new Date()): HealthReport {
+export function buildHealthReport(settings: AISettings, providers: ProviderHealth[], now = new Date(), machine?: MachineInfo): HealthReport {
   const byId = new Map(providers.map((p) => [p.id, p]));
   const routes: RouteHealth[] = TASK_ORDER.map((task) => {
     const info = TASK_INFO[task];
@@ -278,5 +300,11 @@ export function buildHealthReport(settings: AISettings, providers: ProviderHealt
   const missingRequired = routes.filter((r) => r.importance === "required" && (broken(r) || r.status === "off")).length;
   const missingRecommended = routes.filter((r) => r.importance === "recommended" && broken(r)).length;
   const pullCommands = [...new Set(routes.map((r) => r.pull).filter((x): x is string => !!x))];
-  return { providers, routes, summary: { ready: missingRequired === 0, missingRequired, missingRecommended, pullCommands }, checkedAt: now.toISOString() };
+  return {
+    providers,
+    routes,
+    summary: { ready: missingRequired === 0, missingRequired, missingRecommended, pullCommands },
+    ...(machine ? { machine: { ...machine, recommended: recommendPreset(machine.memGB), label: machineLabel(machine) } } : {}),
+    checkedAt: now.toISOString(),
+  };
 }

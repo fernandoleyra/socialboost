@@ -9,6 +9,8 @@ import { ModelsSection } from "@/components/settings/models-section";
 import { DataSection, PublishingSection } from "@/components/settings/data-section";
 import { AppearanceSection } from "@/components/settings/appearance-section";
 import { AccessSection } from "@/components/settings/access-section";
+import { machineInfo } from "@/lib/machine";
+import { machineLabel, recommendPreset } from "@/components/settings/presets";
 import { authEnabled } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
@@ -21,6 +23,11 @@ const JUMP = [
   { href: "#data", label: "Data" },
   { href: "#appearance", label: "Appearance" },
 ];
+
+function fitsThisMachine() {
+  const m = machineInfo();
+  return { preset: recommendPreset(m.memGB), label: `${m.memGB} GB ${machineLabel(m).startsWith("Mac") ? "Mac" : "machine"}` };
+}
 
 export default function SettingsPage() {
   const profile = getActiveProfile();
@@ -46,7 +53,7 @@ export default function SettingsPage() {
         profile={{ id: profile.id, name: profile.name, headline: profile.headline, linkedinUrl: profile.linkedinUrl, language: profile.language, timezone: profile.timezone }}
         otherProfiles={others}
       />
-      <ModelsSection initial={maskAISettings(getAISettings())} />
+      <ModelsSection initial={maskAISettings(getAISettings())} fits={fitsThisMachine()} />
       <PublishingSection />
       <DataSection profileName={profile.name} dataDir={DATA_DIR} />
       <AppearanceSection />

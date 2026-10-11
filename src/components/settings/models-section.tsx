@@ -33,7 +33,7 @@ const TEMPERATURES = [0, 0.2, 0.4, 0.6, 0.7, 0.8, 0.9, 1, 1.2];
 type ListState = ModelListResult & { loading: boolean };
 type TestResult = { ok: boolean; sample?: string; ms?: number; error?: string; hint?: string };
 
-export function ModelsSection({ initial }: { initial: AISettings }) {
+export function ModelsSection({ initial, fits }: { initial: AISettings; fits?: { preset: PresetId; label: string } }) {
   const [saved, setSaved] = useState(initial);
   const [draft, setDraft] = useState(initial);
   const [saving, setSaving] = useState(false);
@@ -182,6 +182,7 @@ export function ModelsSection({ initial }: { initial: AISettings }) {
                           In use
                         </Chip>
                       )}
+                      {!active && fits?.preset === p.id && <Chip tone="blue">Fits this {fits.label}</Chip>}
                     </div>
                     <div className="t-caption font-medium text-label-2">{p.memory}</div>
                   </div>

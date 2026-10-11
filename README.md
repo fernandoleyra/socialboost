@@ -61,17 +61,22 @@ and have a human pass before anything goes out. SocialBoost runs that whole proc
 Requirements: Node.js 20.9+ and [Ollama](https://ollama.com) 0.32+.
 
 ```bash
-# 1. Models (one multimodal model does text and photos; one small model for search)
-ollama pull gemma4:12b
-ollama pull embeddinggemma
+# 1. Models — one multimodal model does interviews, writing and photos; one small model for search.
+#    Pick the line for your machine (the app detects your memory and suggests the same preset):
+ollama pull muse-glimmer:30b && ollama pull qwen3-embedding:0.6b   # Mac with 32 GB+  (Pro, ~19 GB)
+ollama pull gemma4:12b && ollama pull embeddinggemma                # 16 GB            (Recommended, ~9 GB)
+ollama pull qwen3.5:4b && ollama pull embeddinggemma                # 8 GB             (Light, ~4 GB)
 
 # 2. App
 npm install
 npm run build && npm start      # or: npm run dev
 ```
 
-Open http://localhost:3000. The welcome screen creates your profile, checks your models, and starts the positioning
-interview. All data lives in `./data` (SQLite + photos) — back up that folder and you've backed up everything.
+On a Mac, install the Ollama app from ollama.com (not Docker) so models run on the Apple GPU.
+
+Open http://localhost:3000. The welcome screen creates your profile, checks your models (and suggests the preset that
+fits your machine), and starts the positioning interview. All data lives in `./data` (SQLite + photos) — back up that
+folder and you've backed up everything.
 
 ### Model presets
 
