@@ -58,25 +58,47 @@ and have a human pass before anything goes out. SocialBoost runs that whole proc
 
 ## Quick start (local)
 
-Requirements: Node.js 20.9+ and [Ollama](https://ollama.com) 0.32+.
+Requirements: Node.js 20.9+ and [Ollama](https://ollama.com) 0.32+. On a Mac, install the Ollama app from
+ollama.com (not Docker) so models run on the Apple GPU, and keep it open.
+
+**1. Get the code** (it lands in a `socialboost` folder inside the folder your terminal is in):
 
 ```bash
-# 1. Models — one multimodal model does interviews, writing and photos; one small model for search.
-#    Pick the line for your machine (the app detects your memory and suggests the same preset):
-ollama pull muse-glimmer:30b && ollama pull qwen3-embedding:0.6b   # Mac with 32 GB+  (Pro, ~19 GB)
-ollama pull gemma4:12b && ollama pull embeddinggemma                # 16 GB            (Recommended, ~9 GB)
-ollama pull qwen3.5:4b && ollama pull embeddinggemma                # 8 GB             (Light, ~4 GB)
-
-# 2. App
-npm install
-npm run build && npm start      # or: npm run dev
+cd ~
+git clone -b claude/linkedin-ghostwriter-factory https://github.com/fernandoleyra/socialboost
+cd socialboost
 ```
 
-On a Mac, install the Ollama app from ollama.com (not Docker) so models run on the Apple GPU.
+**2. Pull the models for your machine.** One multimodal model does interviews, writing and photos; one small model
+powers search. The app detects your memory and suggests the same preset.
+
+Mac with 32 GB or more (Pro, about 19 GB):
+
+```bash
+ollama pull muse-glimmer:30b
+ollama pull qwen3-embedding:0.6b
+```
+
+16 GB (Recommended, about 9 GB): `ollama pull gemma4:12b` and `ollama pull embeddinggemma`.
+8 GB (Light, about 4 GB): `ollama pull qwen3.5:4b` and `ollama pull embeddinggemma`.
+
+**3. Install, build and start** (from inside the `socialboost` folder):
+
+```bash
+npm install
+npm run build
+npm start
+```
 
 Open http://localhost:3000. The welcome screen creates your profile, checks your models (and suggests the preset that
-fits your machine), and starts the positioning interview. All data lives in `./data` (SQLite + photos) — back up that
-folder and you've backed up everything.
+fits your machine), and starts the positioning interview. Stop the app with Ctrl+C; start it again later with `npm start`
+from the same folder.
+
+All your data lives in the `data` folder inside the project (SQLite + photos) — back up that folder and you've backed up
+everything. To keep it somewhere else, start the app with `SOCIALBOOST_DATA_DIR=/path/to/folder npm start`.
+
+> Tip for macOS: paste commands one line at a time as shown. zsh doesn't treat `#` as a comment in an interactive
+> terminal, so text after a `#` would be passed to the command.
 
 ### Model presets
 
@@ -98,8 +120,10 @@ Whisper server (e.g. `docker compose --profile voice up -d whisper`) and set `ST
 
 ## Docker
 
+Starts the app and Ollama together:
+
 ```bash
-docker compose up -d                                   # app + Ollama
+docker compose up -d
 docker compose exec ollama ollama pull gemma4:12b
 docker compose exec ollama ollama pull embeddinggemma
 ```
@@ -144,11 +168,8 @@ Step-by-step for your first week, plus what to check on your own data: [docs/FIR
 
 ## Development
 
-```bash
-npm run dev          # http://localhost:3000
-npm test             # unit tests (vitest)
-npm run typecheck
-```
+`npm run dev` starts a hot-reloading server on http://localhost:3000, `npm test` runs the unit tests (vitest) and
+`npm run typecheck` checks types.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the code map and conventions.
 
